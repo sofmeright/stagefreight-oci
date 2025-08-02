@@ -36,6 +36,13 @@ It is built with a **GitLab-first** mindset but with a clear path toward **platf
 | 🧪 CI/CD Utility Image | Drop-in toolset for scripting, patching, and infrastructure validation |
 | 🔄 Badge Generation | Used to build and push dynamic SVG badges for component health & release status |
 | 🚀 Platform-Agnostic Extension | Future target is to ship core tools for release workflows across GitHub, Gitea, Forgejo, etc. |
+ 
+ ---
+
+## See Also
+- [Ansible (Gitlab Component)](https://gitlab.prplanit.com/components/ansible)
+- [Ansible OCI](https://gitlab.prplanit.com/precisionplanit/ansible-oci) – Docker runtime image for Ansible workflows
+- [StageFreight GitLab Component](https://gitlab.prplanit.com/components/stagefreight) – GitLab CI pipeline orchestration for releases
 
 ---
 
@@ -75,11 +82,6 @@ generate_release_notes:
 - Fork the repository at StageFreight OCI
 - Submit Merge Requests
 - Open issues with ideas, bugs, or feature requests
-
-## See Also
-- [Ansible (Gitlab Component)](https://gitlab.prplanit.com/components/ansible)
-- [Ansible OCI](https://gitlab.prplanit.com/precisionplanit/ansible-oci) – Docker runtime image for Ansible workflows
-- [StageFreight GitLab Component](https://gitlab.prplanit.com/components/stagefreight) – GitLab CI pipeline orchestration for releases
 
 ## License
 - Distributed under the MIT License.
