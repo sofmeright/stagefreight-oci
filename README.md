@@ -1,7 +1,7 @@
 # StageFreight (OCI)
 
 > A general-purpose DevOps automation image built to accelerate CI/CD pipelines.  
-> Optimized for use with the [StageFreight GitLab component](https://gitlab.prplanit.com/components/stagefreight, but designed to grow beyond GitLab-specific tooling.
+> Optimized for use with the [StageFreight GitLab component](https://gitlab.prplanit.com/components/stagefreight), but designed to grow beyond GitLab-specific tooling.
 
 ---
 
