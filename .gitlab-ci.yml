@@ -1,3 +1,8 @@
+cache:
+  key: "${CI_COMMIT_REF_SLUG}-${CI_PIPELINE_ID}"
+  paths:
+    - .cache/
+
 include:
   - component: $CI_SERVER_FQDN/components/stagefreight/gl-docker-release@main
     inputs:
