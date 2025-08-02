@@ -84,4 +84,4 @@ generate_release_notes:
 - Open issues with ideas, bugs, or feature requests
 
 ## License
-- Distributed under the MIT License.
+- Distributed under the GNU-2.0 License.
