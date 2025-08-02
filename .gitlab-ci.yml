@@ -1,5 +1,5 @@
 include:
-  - component: $CI_SERVER_FQDN/components/stagefreight/gl-component-release@main
+  - component: $CI_SERVER_FQDN/components/stagefreight/gl-docker-release@main
     inputs:
       docker_image: "prplanit/stagefreight"
       gitlab_domain: "https://gitlab.prplanit.com"
