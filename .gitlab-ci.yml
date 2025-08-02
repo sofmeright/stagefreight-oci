@@ -1,6 +1,8 @@
 include:
   - component: $CI_SERVER_FQDN/components/stagefreight/gl-docker-release@main
     inputs:
+      docker_hub_user: "${DOCKER_HUB_USERNAME}"
+      docker_hub_pass: "${DOCKER_HUB_PASSWORD}"
       docker_image: "prplanit/stagefreight"
       gitlab_domain: "https://gitlab.prplanit.com"
       badge-release-status_output: "assets/badge-release_status.svg"
