@@ -4,7 +4,7 @@ LABEL maintainer="SoFMeRight <sofmeright@gmail.com>" \
       org.opencontainers.image.title="StageFreight" \
       description="A general-purpose DevOps automation image built to accelerate CI/CD pipelines." \
       org.opencontainers.image.description="A general-purpose DevOps automation image built to accelerate CI/CD pipelines." \
-      org.opencontainers.image.source="https://gitlab.prplanit.com/precisionplanit/stagefreight.git" \
+      org.opencontainers.image.source="https://gitlab.prplanit.com/precisionplanit/stagefreight-oci.git" \
       org.opencontainers.image.licenses="GPL-3.0"
 
 ENV YQ_VERSION=v4.44.1 \
