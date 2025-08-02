@@ -53,7 +53,7 @@ It is built with a **GitLab-first** mindset but with a clear path toward **platf
 - ✅ General DevOps tools (`bash`, `curl`, `git`, `jq`, `yq`, `coreutils`, etc.)
 - ✅ Markdown formatting and file manipulation utilities
 - ✅ Portable release automation scripts (e.g. changelog, badge generation)
-- ✅ Compatibility with the [StageFreight GitLab Component](#)
+- ✅ Compatibility with the [StageFreight GitLab Component](https://gitlab.prplanit.com/components/stagefreight)
 
 ### Excluded:
 
