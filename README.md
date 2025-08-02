@@ -42,7 +42,7 @@ It is built with a **GitLab-first** mindset but with a clear path toward **platf
 ## See Also
 - [Ansible (Gitlab Component)](https://gitlab.prplanit.com/components/ansible)
 - [Ansible OCI](https://gitlab.prplanit.com/precisionplanit/ansible-oci) – Docker runtime image for Ansible workflows
-- [StageFreight GitLab Component](https://gitlab.prplanit.com/components/stagefreight) – GitLab CI pipeline orchestration for releases
+- [StageFreight GitLab Component](https://gitlab.prplanit.com/components/stagefreight) – GitLab component that provides CI pipeline orchestration for releases
 
 ---
 
