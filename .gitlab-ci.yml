@@ -10,6 +10,7 @@ include:
       docker_hub_pass: "${DOCKER_HUB_PASSWORD}"
       docker_image: "prplanit/stagefreight"
       gitlab_domain: "https://gitlab.prplanit.com"
+      gitlab_token: "${GITLAB_TOKEN}"
       badge-release-status_output: "assets/badge-release_status.svg"
   - project: 'components/stagefreight'
     file: '/export-dependencies.yml'
