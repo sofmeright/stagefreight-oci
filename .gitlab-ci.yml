@@ -6,4 +6,5 @@ include:
       badge-release-status_output: "assets/badge-release_status.svg"
 
 stages:
+  - build
   - release
