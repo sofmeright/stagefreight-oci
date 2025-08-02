@@ -11,10 +11,9 @@ include:
       docker_image: "prplanit/stagefreight"
       gitlab_domain: "https://gitlab.prplanit.com"
       badge-release-status_output: "assets/badge-release_status.svg"
-  - include:
-      - project: 'components/stagefreight'
-        file: '/export-dependencies.yml'
-        ref: main
+  - project: 'components/stagefreight'
+    file: '/export-dependencies.yml'
+    ref: main
         
 stages:
   - build
