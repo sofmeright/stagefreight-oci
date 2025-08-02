@@ -11,6 +11,14 @@
 
 It is built with a **GitLab-first** mindset but with a clear path toward **platform independence** (e.g., GitHub Actions, Gitea CI, Forgejo, and other CI/CD platforms). While the image is currently used internally by the StageFreight GitLab component, it is being developed into a standalone DevOps utility image.
 
+## Progress Notes
+> We are yet to release basic component/docker release management features. Our logics were duplicated accross multiple repositories. We are working towards implementing these features before we can say we even are at an initial release.
+
+Progress:
+- ✅ Docker release management - Working but some further optimization can be done.
+- 🤷🏽‍♀️ Component release management - We have it working smoothly and learned a lot about the logistics of throwing around scripts and assets that live alongside a component. We are not sure if the syntax issue we got early on with our component inputs grouping setup will work like it did in external testing yet.
+- 🚫 Binary (deb/exe/etc.) release management ~ We actually have a project this is done in we forgot about so there is code to be recycled. But we will need time to implement.
+
 ---
 
 ## Key Features
