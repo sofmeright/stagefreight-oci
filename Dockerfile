@@ -13,10 +13,12 @@ ENV YQ_VERSION=v4.44.1 \
 # Install dependencies
 RUN apk add --no-cache \
       bash \
+      coreutils \
       curl \
       git \
       jq \
-      coreutils \
+      rsync \
+      tree \
   && curl -Ls "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${YQ_BINARY}" -o /usr/bin/yq \
   && chmod +x /usr/bin/yq
 
