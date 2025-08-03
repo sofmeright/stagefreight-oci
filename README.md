@@ -1,3 +1,5 @@
+![Latest Release](https://gitlab.prplanit.com/precisionplanit/stagefreight-oci/-/badges/release.svg) ![Latest Release Status](https://gitlab.prplanit.com/precisionplanit/stagefreight-oci/-/raw/main/assets/badge-release-status.svg) [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/T6T41IT163)
+
 # StageFreight (OCI)
 
 > A general-purpose DevOps automation image built to accelerate CI/CD pipelines.  
