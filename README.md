@@ -13,6 +13,12 @@ It is built with a **GitLab-first** mindset but with a clear path toward **platf
 
 ---
 
+> Notice: We are not even in "BETA", this is early stages. I am actually very new to CI/CD. And this project was heavily AI enhanced. StageFreight-OCI specifically, is very much so an *idea* at this point. We have strong ambitions, but this would take time.
+> This image is used in our GitLab component to enforce consistency in our release cycle and our first priority is to achieve desired features within the GitLab component. 
+> We hope you like GitLab, cause it may be a minute otherwise.
+
+---
+
 ## Key Features
 
 - ✅ **Preinstalled DevOps toolchain**: Includes `bash`, `coreutils`, `curl`, `docker-cli`, `git`, `jq`, `rsync`, `tree`, `yq`, and other essential utilities — ready out of the box.
