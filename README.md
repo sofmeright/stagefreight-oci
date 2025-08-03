@@ -15,7 +15,7 @@ It is built with a **GitLab-first** mindset but with a clear path toward **platf
 
 ## Key Features
 
-- ✅ **Preinstalled DevOps toolchain**: Includes `bash`, `coreutils`, `curl`, `git`, `jq`, `rsync`, `tree`, `yq`, and other essential utilities — ready out of the box.
+- ✅ **Preinstalled DevOps toolchain**: Includes `bash`, `coreutils`, `curl`, `docker-cli`, `git`, `jq`, `rsync`, `tree`, `yq`, and other essential utilities — ready out of the box.
 - ⚡ **Zero bootstrapping time**: Skip installing dependencies in your `before_script`; everything is already available.
 - 🧩 **Tailored for CI jobs**: Ideal for release workflows, documentation generation, templating, and file patching tasks.
 - 🔄 **Integrated with StageFreight GitLab component**: Used as the base image for jobs like release note generation, README injection, and badge updates.
@@ -50,7 +50,7 @@ It is built with a **GitLab-first** mindset but with a clear path toward **platf
 
 ### Included:
 
-- ✅ General DevOps tools (`bash`, `coreutils`, `curl`, `git`, `jq`, `rsync`, `tree`, `yq`, etc.)
+- ✅ General DevOps tools (`bash`, `coreutils`, `curl`, `docker-cli (w/ buildx)`, `git`, `jq`, `rsync`, `tree`, `yq`, etc.)
 - ✅ Markdown formatting and file manipulation utilities
 - ✅ Portable release automation scripts (e.g. changelog, badge generation)
 - ✅ Compatibility with the [StageFreight GitLab Component](https://gitlab.prplanit.com/components/stagefreight)
