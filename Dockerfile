@@ -33,10 +33,4 @@ RUN mkdir -p ~/.docker/cli-plugins && \
     curl -Lo ~/.docker/cli-plugins/docker-buildx "https://github.com/docker/buildx/releases/download/${LATEST_BUILDX_VERSION}/buildx-${LATEST_BUILDX_VERSION}.linux-amd64" && \
     chmod +x ~/.docker/cli-plugins/docker-buildx
 
-# Create required directory structure
-RUN mkdir -p /opt/stagefreight
-WORKDIR /opt/stagefreight
-
-COPY README.md README.md
-
-# ENTRYPOINT ["/bin/sh"] # Seems to break GitLab...
+CMD ["/bin/sh"]
