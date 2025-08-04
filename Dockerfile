@@ -39,4 +39,4 @@ WORKDIR /opt/stagefreight
 
 COPY README.md README.md
 
-ENTRYPOINT ["/bin/sh"]
+# ENTRYPOINT ["/bin/sh"] # Seems to break GitLab...
