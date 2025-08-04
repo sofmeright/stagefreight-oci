@@ -6,12 +6,14 @@ cache:
 include:
   - component: $CI_SERVER_FQDN/components/stagefreight/gl-docker-release@main
     inputs:
-      docker_hub_user: "${DOCKER_HUB_USERNAME}"
-      docker_hub_pass: "${DOCKER_HUB_PASSWORD}"
-      docker_image: "prplanit/stagefreight"
       gitlab_domain: "https://gitlab.prplanit.com"
       gitlab_token: "${GITLAB_TOKEN}"
-      badge-release-status_output: "assets/badge-release_status.svg"
+      docker_release_path: "prplanit/stagefreight"
+      freight_docker_url_1: "docker.io"
+      freight_docker_user_1: "${DOCKER_HUB_USERNAME}"
+      freight_docker_pass_1: "${DOCKER_HUB_PASSWORD}"
+      freight_docker_path_1: "prplanit/stagefreight"
+      freight_docker_registry_1: "docker"
   - project: 'components/stagefreight'
     file: '/export-dependencies.yml'
     ref: main
