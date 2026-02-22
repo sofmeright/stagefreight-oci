@@ -9,16 +9,20 @@ import (
 
 // VersionInfo holds resolved version metadata from git.
 type VersionInfo struct {
-	Version string // "1.2.3" or "0.0.0-dev+abc1234"
-	Major   string
-	Minor   string
-	Patch   string
-	SHA     string
-	Branch  string
-	IsRelease bool // true if Version came from a clean tag
+	Version      string // full version: "1.2.3", "1.2.3-alpha.1", "0.0.0-dev+abc1234"
+	Base         string // semver base without prerelease: "1.2.3"
+	Major        string
+	Minor        string
+	Patch        string
+	Prerelease   string // "alpha.1", "beta.2", "rc.1", or "" for stable
+	SHA          string
+	Branch       string
+	IsRelease    bool // true if HEAD is exactly at a tag
+	IsPrerelease bool // true if tag has a prerelease suffix
 }
 
-var semverRe = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
+// semverRe captures major.minor.patch and optional -prerelease suffix.
+var semverRe = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-(.+))?$`)
 
 // DetectVersion resolves version info from git tags and refs.
 func DetectVersion(rootDir string) (*VersionInfo, error) {
@@ -42,6 +46,7 @@ func DetectVersion(rootDir string) (*VersionInfo, error) {
 	if err != nil {
 		// No tags — use dev version
 		v.Version = fmt.Sprintf("0.0.0-dev+%s", v.SHA)
+		v.Base = "0.0.0"
 		v.Major = "0"
 		v.Minor = "0"
 		v.Patch = "0"
@@ -49,8 +54,8 @@ func DetectVersion(rootDir string) (*VersionInfo, error) {
 	}
 
 	// Check if HEAD is exactly the tag (clean release)
-	exactTag, _ := gitCmd(rootDir, "describe", "--tags", "--exact-match")
-	v.IsRelease = exactTag != "" && err == nil
+	exactTag, exactErr := gitCmd(rootDir, "describe", "--tags", "--exact-match")
+	v.IsRelease = exactTag != "" && exactErr == nil
 
 	// Parse semver from tag
 	tag := strings.TrimSpace(desc)
@@ -58,10 +63,21 @@ func DetectVersion(rootDir string) (*VersionInfo, error) {
 		v.Major = m[1]
 		v.Minor = m[2]
 		v.Patch = m[3]
-		v.Version = fmt.Sprintf("%s.%s.%s", m[1], m[2], m[3])
+		v.Base = fmt.Sprintf("%s.%s.%s", m[1], m[2], m[3])
+
+		if m[4] != "" {
+			// Has prerelease suffix: 0.2.0-alpha.1
+			v.Prerelease = m[4]
+			v.IsPrerelease = true
+			v.Version = fmt.Sprintf("%s-%s", v.Base, v.Prerelease)
+		} else {
+			v.Version = v.Base
+		}
 	} else {
 		// Non-semver tag — use it raw
-		v.Version = strings.TrimPrefix(tag, "v")
+		raw := strings.TrimPrefix(tag, "v")
+		v.Version = raw
+		v.Base = raw
 	}
 
 	// If not a release, append dev suffix

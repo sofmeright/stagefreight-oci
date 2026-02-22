@@ -2,9 +2,39 @@ version: 1
 
 docker:
   platforms: [linux/amd64]
+
   registries:
+    # ── Docker Hub: stable releases ─────────────────────────────────
+    # Full rolling tag set. Renovate picks up {base} for auto-updates.
+    # Only clean semver tags (no prerelease suffix).
     - url: docker.io
       path: prplanit/stagefreight
-      tags: ["{version}", "latest"]
-      branches: [main]
+      tags:
+        - "{version}"          # 0.2.0
+        - "{major}.{minor}"    # 0.2
+        - "{major}"            # 0
+        - "latest"
+      branches: ["^main$"]
+      git_tags: ["^\\d+\\.\\d+\\.\\d+$"]
       credentials: DOCKERHUB
+
+    # ── Docker Hub: pre-releases (alpha/beta/rc) ────────────────────
+    # Version tag only — no rolling tags, no latest.
+    - url: docker.io
+      path: prplanit/stagefreight
+      tags:
+        - "{version}"          # 0.2.0-alpha.1
+      branches: ["^main$"]
+      git_tags: ["\\d+\\.\\d+\\.\\d+-.+"]
+      credentials: DOCKERHUB
+
+    # ── Quay: dev builds on every commit ────────────────────────────
+    # Ephemeral builds for testing. Retention keeps last 10.
+    #- url: quay.io
+    #  path: prplanit/stagefreight
+    #  tags:
+    #    - "dev-{sha}"         # dev-abc1234
+    #    - "{branch}-{sha}"    # main-abc1234
+    #  branches: [".*"]
+    #  credentials: QUAY
+    #  retention: 10

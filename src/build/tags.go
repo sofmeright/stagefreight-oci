@@ -1,38 +1,225 @@
 package build
 
-import "strings"
+import (
+	"crypto/rand"
+	"fmt"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+)
 
-// ResolveTags expands tag templates against version info.
+// ResolveTemplate expands template variables in a single string against
+// version info and environment. Works on any part of an image reference —
+// registry URL, path, tag, or a fully composed image name.
 //
 // Supported templates:
 //
-//	{version}        → "1.2.3"
-//	{major}          → "1"
-//	{minor}          → "2"
-//	{patch}          → "3"
-//	{major}.{minor}  → "1.2"
-//	{branch}         → "main"
-//	{sha}            → "abc1234"  (short)
-//	{sha:.7}         → "abc1234"  (explicit length, same as short)
-//	latest           → "latest"   (literal passthrough)
+//	Simple variables:
+//	  {version}          → "1.2.3" or "1.2.3-alpha.1" (full version)
+//	  {base}             → "1.2.3" (semver base, no prerelease)
+//	  {major}            → "1"
+//	  {minor}            → "2"
+//	  {patch}            → "3"
+//	  {prerelease}       → "alpha.1" or "" (empty for stable)
+//	  {branch}           → "main", "develop"
+//
+//	Width-controlled variables — {name:N} truncates or pads to N:
+//	  {sha}              → "abc1234" (default 7)
+//	  {sha:12}           → "abc1234def01" (first 12 chars)
+//	  {sha:4}            → "abc1" (first 4 chars)
+//
+//	Counters — resolved by the channel/tag manager at bump time:
+//	  {n}                → "42" (decimal counter, no padding)
+//	  {n:5}              → "00042" (zero-padded to 5 digits)
+//	  {hex:4}            → "002a" (sequential hex counter, padded to 4 chars)
+//	  {hex:8}            → "0000002a" (same counter, wider pad)
+//
+//	Random generators — fresh value each resolution:
+//	  {rand:6}           → "084721" (random digits, exactly N chars)
+//	  {rand:4}           → "3819"
+//	  {randhex:8}        → "a3f7c012" (random hex, exactly N chars)
+//	  {randhex:4}        → "b7e2"
+//
+//	Environment variables:
+//	  {env:VAR_NAME}     → value of environment variable
+//
+//	Literals pass through as-is:
+//	  "latest"           → "latest"
+//
+// Templates compose freely in any position:
+//
+//	"{env:REGISTRY}/myorg/myapp:{version}"
+//	"version-{base}.{env:BUILD_NUM}"
+//	"{branch}-{sha:10}"
+//	"dev-{n:5}"
+//	"build-{randhex:8}"
+//	"nightly-{hex:4}"
+func ResolveTemplate(tmpl string, v *VersionInfo) string {
+	if v == nil {
+		return tmpl
+	}
+
+	s := tmpl
+
+	// Resolve parameterized templates first (they contain colons that
+	// could collide with simpler replacements)
+	s = resolveEnvVars(s)
+	s = resolveSHA(s, v.SHA)
+	s = resolveRandHex(s)
+	s = resolveRand(s)
+	// {n:W} and {hex:W} counters are resolved at bump/push time by the
+	// tag manager, not here. ResolveTemplate preserves them so the
+	// channel system can interpret the pattern and supply the counter value.
+
+	// Simple replacements
+	s = strings.ReplaceAll(s, "{version}", v.Version)
+	s = strings.ReplaceAll(s, "{base}", v.Base)
+	s = strings.ReplaceAll(s, "{major}", v.Major)
+	s = strings.ReplaceAll(s, "{minor}", v.Minor)
+	s = strings.ReplaceAll(s, "{patch}", v.Patch)
+	s = strings.ReplaceAll(s, "{prerelease}", v.Prerelease)
+	s = strings.ReplaceAll(s, "{branch}", sanitizeTag(v.Branch))
+	s = strings.ReplaceAll(s, "{sha}", truncate(v.SHA, 7))
+
+	return s
+}
+
+// ResolveTags expands tag templates against version info.
 func ResolveTags(templates []string, v *VersionInfo) []string {
 	if v == nil {
 		return templates
 	}
-
 	tags := make([]string, 0, len(templates))
 	for _, tmpl := range templates {
-		tag := tmpl
-		tag = strings.ReplaceAll(tag, "{version}", v.Version)
-		tag = strings.ReplaceAll(tag, "{major}", v.Major)
-		tag = strings.ReplaceAll(tag, "{minor}", v.Minor)
-		tag = strings.ReplaceAll(tag, "{patch}", v.Patch)
-		tag = strings.ReplaceAll(tag, "{branch}", sanitizeTag(v.Branch))
-		tag = strings.ReplaceAll(tag, "{sha}", v.SHA)
-		tag = strings.ReplaceAll(tag, "{sha:.7}", v.SHA)
-		tags = append(tags, tag)
+		tags = append(tags, ResolveTemplate(tmpl, v))
 	}
 	return tags
+}
+
+// paramRe matches {name:param} patterns.
+var paramRe = regexp.MustCompile(`\{(\w+):([^}]+)\}`)
+
+// resolveEnvVars replaces all {env:VAR_NAME} with the env var value.
+func resolveEnvVars(s string) string {
+	for {
+		start := strings.Index(s, "{env:")
+		if start == -1 {
+			return s
+		}
+		end := strings.Index(s[start:], "}")
+		if end == -1 {
+			return s
+		}
+		end += start
+		varName := s[start+5 : end]
+		val := os.Getenv(varName)
+		s = s[:start] + val + s[end+1:]
+	}
+}
+
+// resolveSHA replaces {sha:N} with the SHA truncated to N chars.
+// Plain {sha} is handled separately by the simple replacement pass.
+func resolveSHA(s string, sha string) string {
+	for {
+		start := strings.Index(s, "{sha:")
+		if start == -1 {
+			return s
+		}
+		end := strings.Index(s[start:], "}")
+		if end == -1 {
+			return s
+		}
+		end += start
+		widthStr := s[start+5 : end]
+		// Support legacy {sha:.7} syntax
+		widthStr = strings.TrimPrefix(widthStr, ".")
+		width, err := strconv.Atoi(widthStr)
+		if err != nil || width <= 0 {
+			width = 7
+		}
+		s = s[:start] + truncate(sha, width) + s[end+1:]
+	}
+}
+
+// resolveRand replaces {rand:N} with N random decimal digits.
+func resolveRand(s string) string {
+	for {
+		start := strings.Index(s, "{rand:")
+		if start == -1 {
+			return s
+		}
+		// Make sure this isn't {randhex:
+		if start+6 < len(s) && strings.HasPrefix(s[start:], "{randhex:") {
+			// Skip past this — handled by resolveRandHex
+			next := strings.Index(s[start+1:], "{rand:")
+			if next == -1 {
+				return s
+			}
+			// Try again from the next occurrence — but simpler to just
+			// require resolveRandHex runs first (which it does).
+			return s
+		}
+		end := strings.Index(s[start:], "}")
+		if end == -1 {
+			return s
+		}
+		end += start
+		widthStr := s[start+6 : end]
+		width, err := strconv.Atoi(widthStr)
+		if err != nil || width <= 0 {
+			width = 6
+		}
+		s = s[:start] + randomDigits(width) + s[end+1:]
+	}
+}
+
+// resolveRandHex replaces {randhex:N} with N random hex characters.
+func resolveRandHex(s string) string {
+	for {
+		start := strings.Index(s, "{randhex:")
+		if start == -1 {
+			return s
+		}
+		end := strings.Index(s[start:], "}")
+		if end == -1 {
+			return s
+		}
+		end += start
+		widthStr := s[start+9 : end]
+		width, err := strconv.Atoi(widthStr)
+		if err != nil || width <= 0 {
+			width = 8
+		}
+		s = s[:start] + randomHex(width) + s[end+1:]
+	}
+}
+
+// truncate returns the first n characters of s, or s if shorter.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+// randomDigits returns n cryptographically random decimal digits.
+func randomDigits(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	digits := make([]byte, n)
+	for i := range b {
+		digits[i] = '0' + b[i]%10
+	}
+	return string(digits)
+}
+
+// randomHex returns n cryptographically random hex characters.
+func randomHex(n int) string {
+	b := make([]byte, (n+1)/2)
+	_, _ = rand.Read(b)
+	h := fmt.Sprintf("%x", b)
+	return truncate(h, n)
 }
 
 // sanitizeTag replaces characters not allowed in Docker tags.

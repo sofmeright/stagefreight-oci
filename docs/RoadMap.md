@@ -483,6 +483,171 @@ This same pattern syntax is used in:
 - **Security detail rules** — `tag` and `branch` in `Condition` control detail level
 - **Future features** — notifications, approvals, test scopes will all use the same primitive
 
+#### `stagefreight tag` — Version Lifecycle & Tag Management
+
+Manages the version lifecycle: creating, removing, and bumping git tags through user-definable release channels with auto-incrementing semantics.
+
+**Subcommands:**
+
+| Command | Description |
+|---|---|
+| `stagefreight tag` | Show current version, latest tag, and channel state |
+| `stagefreight tag bump <channel>` | Bump to the next version in a channel and create the git tag |
+| `stagefreight tag add <version>` | Create a git tag (local + remote push) |
+| `stagefreight tag remove <version>` | Delete a git tag (local + remote) |
+| `stagefreight tag next <channel>` | Dry-run: show what the next version would be without creating it |
+| `stagefreight tag list` | List all tags with channel classification |
+
+**Release channels:**
+
+Channels define the promotion ladder — how versions flow from development through testing to stable release. Each channel specifies its tag pattern, what it increments, and what channel it promotes from.
+
+```yaml
+release:
+  # Ordered promotion ladder: dev → alpha → beta → rc → stable
+  channels:
+    dev:
+      pattern: "dev-{n:5}"          # dev-00001, dev-00002, ... dev-99999
+      ephemeral: true               # no git tag, image-only
+      increment: n                  # auto-increments per push
+      retention: 10                 # prune old dev tags, keep last 10
+      # Dev builds push to Quay — no tag clutter on Docker Hub
+      #
+      # {n:WIDTH} pads the counter to WIDTH digits with leading zeros.
+      # Ensures lexicographic sort matches numeric sort — tools like
+      # Renovate, registry UIs, and `docker image ls` display correctly.
+      #
+      #   {n}       → 1, 2, ... 99999          (no padding)
+      #   {n:3}     → 001, 002, ... 999
+      #   {n:5}     → 00001, 00002, ... 99999
+      #
+      # Alternative patterns — it's all templates:
+      #   "dev-{sha}"                 — hash-based, no counter needed
+      #   "dev-{sha}-{n:3}"           — hash + padded counter for rebuild disambiguation
+      #   "{branch}-{sha}"            — branch-scoped: feature-auth-abc1234
+      #   "{branch}-{n:4}"            — branch-scoped padded counter: main-0042
+      #   "dev-{env:CI_PIPELINE_IID}" — CI pipeline counter (GitLab native)
+
+    alpha:
+      pattern: "{next}-alpha.{n}"   # 0.3.0-alpha.1, 0.3.0-alpha.2
+      from: stable                  # base version comes from latest stable tag
+      increment: n                  # auto-increments the counter
+
+    beta:
+      pattern: "{next}-beta.{n}"    # 0.3.0-beta.1
+      from: alpha                   # promotes from alpha
+      increment: n
+
+    rc:
+      pattern: "{next}-rc.{n}"      # 0.3.0-rc.1
+      from: beta                    # promotes from beta
+      increment: n
+
+    stable:
+      pattern: "{major}.{minor}.{patch}"
+      bump: [major, minor, patch]   # user chooses which segment to bump
+      # stable tags trigger the full rolling tag set on Docker Hub
+```
+
+**Bump behavior:**
+
+```bash
+# Starting from latest stable tag: 0.2.0
+
+$ stagefreight tag bump alpha
+  → 0.3.0-alpha.1        # bumps minor from 0.2.0, starts alpha counter at 1
+
+$ stagefreight tag bump alpha
+  → 0.3.0-alpha.2        # increments alpha counter
+
+$ stagefreight tag bump beta
+  → 0.3.0-beta.1         # promotes from alpha, resets counter
+
+$ stagefreight tag bump rc
+  → 0.3.0-rc.1           # promotes from beta
+
+$ stagefreight tag bump stable
+  → 0.3.0                # drops prerelease suffix — this is the release
+
+$ stagefreight tag bump patch
+  → 0.3.1                # patch bump within stable
+
+$ stagefreight tag bump minor
+  → 0.4.0                # minor bump, resets patch
+
+$ stagefreight tag bump major
+  → 1.0.0                # major bump, resets minor and patch
+```
+
+**How `{next}` resolves:**
+
+The `{next}` template in channel patterns resolves to the *next* version that the promotion ladder is targeting. This is determined by:
+
+1. Find the latest stable tag (e.g., `0.2.0`)
+2. Apply the default bump level (default: `minor`, configurable per-project)
+3. Result: `0.3.0`
+
+This means `alpha.1`, `beta.1`, and `rc.1` all target the same base version (`0.3.0`) until a stable release is cut. After `0.3.0` ships, the next `bump alpha` targets `0.4.0`.
+
+```yaml
+release:
+  default_bump: minor              # what stagefreight tag bump alpha uses as base
+```
+
+Override at bump time: `stagefreight tag bump alpha --major` → `1.0.0-alpha.1`.
+
+**Custom channels:**
+
+Users can define their own channels for project-specific workflows:
+
+```yaml
+release:
+  channels:
+    nightly:
+      pattern: "{base}-nightly.{env:CI_PIPELINE_IID}"
+      ephemeral: true
+
+    snapshot:
+      pattern: "{base}-SNAPSHOT"
+      ephemeral: true
+
+    hotfix:
+      pattern: "{major}.{minor}.{patch}"
+      from: stable
+      bump: [patch]                 # hotfix channel always bumps patch only
+
+    lts:
+      pattern: "{major}.{minor}.{patch}-lts"
+      from: stable
+      bump: [patch]                 # LTS releases track a specific minor
+```
+
+**Tag list output:**
+
+```
+$ stagefreight tag list
+  CHANNEL    TAG                 DATE
+  stable     0.2.0               2026-02-15
+  alpha      0.3.0-alpha.2       2026-02-20
+  alpha      0.3.0-alpha.1       2026-02-18
+  stable     0.1.1               2026-01-10
+  stable     0.1.0               2025-12-01
+```
+
+**Integration with image tagging:**
+
+The channel system connects directly to the registry tag templates and filters. When `stagefreight tag bump alpha` creates `0.3.0-alpha.1`:
+
+- The `git_tags: ["\\d+\\.\\d+\\.\\d+-.+"]` filter on the pre-release registry entry matches → pushes `0.3.0-alpha.1` tag only
+- The `git_tags: ["^\\d+\\.\\d+\\.\\d+$"]` filter on the stable entry does NOT match → `latest` and rolling tags untouched
+
+When `stagefreight tag bump stable` creates `0.3.0`:
+
+- The stable filter matches → pushes `0.3.0`, `0.3`, `0`, `latest`
+- The pre-release filter does NOT match → no duplicate push
+
+This is the unified naming convention: channels control the version lifecycle, registry filters control which tags land where, and template resolution handles the image naming. One system, zero ambiguity.
+
 **Vendor-aware registry links:**
 
 When `--registry-links` is enabled (default), `release create` adds clickable links to the release for each configured registry. The link URL is vendor-aware:

@@ -35,6 +35,13 @@ type RegistryConfig struct {
 	//   ["!^v.*-rc"]                   — exclude release candidates
 	//   ["^v.*", "!^v.*-alpha"]        — all v-prefixed except alpha
 	GitTags []string `yaml:"git_tags"`
+
+	// Retention sets a maximum number of tags to keep for this registry.
+	// After a successful push, StageFreight prunes older tags matching the
+	// same tag patterns, keeping only the most recent N. Zero = no cleanup.
+	// Requires registry API support (Quay, Harbor, GitLab, JFrog, GHCR).
+	// Docker Hub does not expose a tag deletion API.
+	Retention int `yaml:"retention,omitempty"`
 }
 
 // CacheConfig holds build cache settings.

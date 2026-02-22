@@ -53,11 +53,12 @@ func (e *imageEngine) Plan(ctx context.Context, cfgRaw interface{}, det *build.D
 		platforms = []string{fmt.Sprintf("linux/%s", runtime.GOARCH)}
 	}
 
-	// Resolve version for tag templates
+	// Resolve version for templates (tags, paths, URLs)
 	versionInfo, _ := build.DetectVersion(det.RootDir)
 	if versionInfo == nil {
 		versionInfo = &build.VersionInfo{
 			Version: "dev",
+			Base:    "0.0.0",
 			SHA:     "unknown",
 			Branch:  "unknown",
 		}
@@ -77,17 +78,20 @@ func (e *imageEngine) Plan(ctx context.Context, cfgRaw interface{}, det *build.D
 				continue
 			}
 
+			// Resolve templates in URL, path, and tags
+			resolvedURL := build.ResolveTemplate(reg.URL, versionInfo)
+			resolvedPath := build.ResolveTemplate(reg.Path, versionInfo)
 			resolvedTags := build.ResolveTags(reg.Tags, versionInfo)
 
 			// Resolve provider: explicit config, or auto-detect from URL
 			provider := reg.Provider
 			if provider == "" {
-				provider = build.DetectProvider(reg.URL)
+				provider = build.DetectProvider(resolvedURL)
 			}
 
 			target := build.RegistryTarget{
-				URL:         reg.URL,
-				Path:        reg.Path,
+				URL:         resolvedURL,
+				Path:        resolvedPath,
 				Tags:        resolvedTags,
 				Credentials: reg.Credentials,
 				Provider:    provider,
@@ -95,7 +99,7 @@ func (e *imageEngine) Plan(ctx context.Context, cfgRaw interface{}, det *build.D
 			registries = append(registries, target)
 
 			for _, t := range resolvedTags {
-				ref := fmt.Sprintf("%s/%s:%s", reg.URL, reg.Path, t)
+				ref := fmt.Sprintf("%s/%s:%s", resolvedURL, resolvedPath, t)
 				tags = append(tags, ref)
 			}
 		}
