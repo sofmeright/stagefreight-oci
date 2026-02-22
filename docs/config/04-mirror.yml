@@ -1,0 +1,20 @@
+# .stagefreight.yml — Mirror Declaration
+#
+# Who: Any repo that is a read-only mirror of a source-of-truth elsewhere.
+#      GitHub mirrors of GitLab repos, public mirrors of private repos, etc.
+# What: Declares "I am a mirror." The daemon will never open MRs here,
+#       never push code here, never treat this as a source. Git pushes
+#       come from the source side via mirror rules in the daemon config.
+# Build: None — mirrors don't build, the source does.
+# Why: Prevents the daemon from accidentally treating a mirror as writable.
+#      Badge stays current so the mirror looks alive.
+
+version: 1
+
+mirror_of: gitlab.prplanit.com/precisionplanit/my-project
+
+release:
+  badge: true
+
+docs:
+  readme_sync: [dockerhub]           # push README to DockerHub description

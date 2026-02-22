@@ -1,0 +1,40 @@
+# .stagefreight.yml — Helm Chart / Infrastructure-as-Code
+#
+# Who: Teams publishing Helm charts, Terraform modules, Ansible collections,
+#      Kustomize overlays, or any IaC that gets versioned and distributed.
+# What: No container build. Focus on linting, testing, packaging, and publishing
+#       the chart/module to its registry. Release notes and badge management.
+# Build: None (container-wise). Chart packaging is a sanity check.
+# Why: IaC repos need the same hygiene — release notes, security scanning of
+#      embedded images/dependencies, license compliance, golden file sync.
+
+version: 1
+
+release:
+  notes: true
+  badge: true
+
+security:
+  scan: true                          # scan for known CVEs in referenced images
+  audit_deps: true                    # check Chart.yaml dependencies
+
+license:
+  compliance: true
+
+templates:
+  golden_files: true
+  gitignore: true
+
+docs:
+  readme_inputs: true                 # generate values table from values.yaml
+
+flair:
+  badges: auto
+
+dev:
+  test:
+    sanity:
+      - { name: lint, run: "helm lint charts/my-chart" }
+      - { name: template, run: "helm template my-chart charts/my-chart --values tests/values-test.yaml" }
+      - { name: kubeval, run: "helm template my-chart charts/my-chart | kubeval --strict" }
+      - { name: package, run: "helm package charts/my-chart --destination dist/" }

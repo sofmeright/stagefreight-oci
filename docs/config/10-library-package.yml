@@ -1,0 +1,45 @@
+# .stagefreight.yml — Published Library / Package
+#
+# Who: Maintainers of libraries published to package registries — npm, PyPI,
+#      crates.io, Go modules, NuGet. No Docker image, no container build.
+# What: Security scanning of dependencies, license compliance, SBOM generation,
+#       release notes, and badge management. Build is handled by the language's
+#       native toolchain — StageFreight doesn't replace `npm publish` or
+#       `cargo publish`, it handles everything around it.
+# Build: None (container-wise). The library's own build/test toolchain runs
+#        via dev.test.sanity checks.
+# Why: Libraries need the same stewardship as applications — dependency auditing,
+#      license checking, changelog maintenance — but they don't produce images.
+
+version: 1
+
+release:
+  notes: true
+  badge: true
+
+security:
+  scan: true
+  sbom: true
+  audit_deps: true
+  secret_findings: alert
+
+license:
+  compliance: true
+  headers: true
+  spdx: true
+
+docs:
+  readme_sync: [npm]                  # push README to npm package page
+
+flair:
+  badges: auto
+
+dev:
+  test:
+    sanity:
+      - { name: install, run: "npm ci" }
+      - { name: lint, run: "npm run lint" }
+      - { name: typecheck, run: "npm run typecheck" }
+      - { name: unit-tests, run: "npm test -- --coverage" }
+      - { name: build, run: "npm run build" }
+      - { name: package-dry-run, run: "npm publish --dry-run" }

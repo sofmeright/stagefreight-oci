@@ -1,0 +1,40 @@
+# .stagefreight.yml — Patched Fork
+#
+# Who: Anyone maintaining local patches on top of an upstream project.
+#      Homelab users, companies running customized open-source tools,
+#      contributors who need features upstream hasn't merged yet.
+# What: Tracks upstream, rebases local patches, audits upstream changes
+#       for suspicious commits, rebuilds the image with patches applied.
+# Build: Upstream's Dockerfile, your patches on top.
+# Why: Fork maintenance is manual hell. Nobody should be doing this by hand.
+
+version: 1
+
+fork:
+  upstream: github.com/henrygd/beszel
+  strategy: rebase                    # or: merge
+  auto_sync: true                     # daemon auto-syncs on schedule
+
+release:
+  notes: true
+  badge: true
+
+docker:
+  platforms: [linux/amd64, linux/arm64]
+  registries:
+    - url: docker.io
+      path: prplanit/beszel
+      tags: ["{version}-patched", latest]
+    - url: registry.prplanit.com
+      path: tools/beszel
+      tags: ["{version}", "{branch}-{sha:.7}"]
+      branches: ["*"]
+  rebuild:
+    schedule: daily                   # check for upstream changes daily
+    on_base_update: true
+
+security:
+  scan: true
+  sbom: true
+  audit_deps: true
+  codebase_audit: true                # scan upstream changes for hidden characters too

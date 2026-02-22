@@ -1,0 +1,34 @@
+# .stagefreight.yml — Static Site / Documentation
+#
+# Who: Documentation repos, marketing sites, blogs, wikis. Built with Hugo,
+#      Jekyll, MkDocs, Docusaurus, or plain HTML.
+# What: No container image. Focus on link checking, badge management, README
+#       sync, and flair. If the site builds via a Dockerfile (e.g., Hugo in
+#       a container), the build section can extract the static output.
+# Build: Optional — some static sites use Dockerfiles to ensure consistent
+#        build environments. Others just run `hugo build` directly.
+# Why: Even docs repos benefit from link checking, badge management, and
+#      security scanning of dependencies (npm, Python, Ruby gems).
+
+version: 1
+
+release:
+  notes: true
+  badge: true
+
+docs:
+  readme_inputs: true
+  readme_sync: [github]               # keep GitHub repo description current
+
+security:
+  audit_deps: true                    # scan npm/pip/gem lockfiles
+
+flair:
+  badges: auto
+
+dev:
+  test:
+    sanity:
+      - { name: install, run: "npm ci" }
+      - { name: build, run: "npm run build" }
+      - { name: link-check, run: "npx linkinator ./dist --recurse" }

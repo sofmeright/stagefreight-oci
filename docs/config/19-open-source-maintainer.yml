@@ -1,0 +1,87 @@
+# .stagefreight.yml — Open Source Maintainer
+#
+# Who: Maintainers of popular open-source projects with a community. Multiple
+#      registries for maximum distribution. Community contribution workflow.
+#      Public security posture. Documentation quality matters.
+# What: Multi-platform images on every major registry. Full security scanning
+#       with public SBOM. README sync to every registry. Flair management.
+#       Changelog maintenance for contributors.
+# Build: Multi-platform image distributed everywhere the community expects.
+# Why: Open source maintainers do 80% maintenance, 20% coding. StageFreight
+#      automates the maintenance so they can focus on code.
+
+version: 1
+source: true
+
+release:
+  notes: true
+  badge: true
+
+docker:
+  platforms: [linux/amd64, linux/arm64, linux/arm/v7]
+  registries:
+    - url: docker.io
+      path: myorg/myproject
+      tags: ["{version}", "{major}.{minor}", "{major}", latest]
+      branches: [main]
+    - url: ghcr.io
+      path: myorg/myproject
+      tags: ["{version}", latest]
+      branches: [main]
+    - url: quay.io
+      path: myorg/myproject
+      tags: ["{version}", latest]
+      branches: [main]
+  rebuild:
+    schedule: weekly
+    on_base_update: true
+    notify: true
+
+docs:
+  readme_inputs: true
+  readme_sync: [dockerhub, ghcr, quay]
+
+security:
+  scan: true
+  sbom: true                          # public SBOM builds trust
+  fail_on_critical: true
+  audit_deps: true
+  secret_findings: alert
+  codebase_audit: true                # invisible chars, bidi overrides, AI prompt injection
+  codebase_audit_threshold: critical  # community PRs get scanned — fail on critical only
+
+license:
+  compliance: true
+  headers: true
+  spdx: true
+
+templates:
+  golden_files: true                  # CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md
+  gitignore: true
+
+flair:
+  badges: auto
+
+dev:
+  target: dev
+  env:
+    DATABASE_URL: postgres://dev:dev@db:5432/myproject_dev
+    LOG_LEVEL: debug
+  services:
+    db:
+      image: docker.io/library/postgres:17-alpine
+      env: { POSTGRES_USER: dev, POSTGRES_PASSWORD: dev, POSTGRES_DB: myproject_dev }
+      healthcheck: { test: "pg_isready -U dev", interval: 5s }
+  ports: ["8080:8080"]
+  test:
+    startup: { timeout: 30s, depends_on: [db] }
+    healthchecks:
+      - { name: http, type: http, url: "http://localhost:8080/health", expect_status: 200 }
+    sanity:
+      - { name: migrations, run: "./manage.py migrate --check" }
+      - { name: lint, run: "npm run lint" }
+      - { name: tests, run: "npm test -- --coverage" }
+      - { name: smoke, run: "curl -sf http://localhost:8080/api/status | jq -e '.ok'" }
+    teardown: always
+
+yolo: false                           # community projects review everything

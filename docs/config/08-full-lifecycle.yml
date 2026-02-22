@@ -1,0 +1,114 @@
+# .stagefreight.yml — Full Lifecycle (Business/Public Project)
+#
+# Who: A business shipping a public-facing application. Multiple registries
+#      with vendor-specific tag conventions. Full security and compliance.
+#      Scheduled rebuilds. Everything turned on.
+# What: The "everything" manifest. Every feature StageFreight offers, configured
+#       for a real production application.
+# Build: Multi-platform image pushed to Docker Hub, GHCR, LinuxServer.io,
+#        and a private registry.
+# Why: Shows the full surface area of the manifest for a project that needs it all.
+
+version: 1
+source: true
+
+release:
+  notes: true
+  badge: true
+
+docker:
+  platforms: [linux/amd64, linux/arm64, linux/arm/v7]
+  registries:
+    - url: docker.io
+      path: prplanit/invoiceninja
+      tags: ["{version}", "{major}.{minor}", "{major}", latest]
+      branches: [main]
+    - url: ghcr.io
+      path: sofmeright/invoiceninja
+      tags: ["{version}", latest]
+      branches: [main]
+    - url: lscr.io
+      path: sofmeright/invoiceninja
+      tags: ["{version}-ls{build}", latest]
+      branches: [main]
+    - url: registry.prplanit.com
+      path: apps/invoiceninja
+      tags: ["{version}", "{branch}-{sha:.7}", "{branch}-latest"]
+      branches: ["*"]
+  rebuild:
+    schedule: weekly
+    on_base_update: true
+    notify: true
+
+lint:
+  level: changed                      # default — only scan what changed
+  modules:
+    secrets: true
+    unicode: true
+    yaml: true
+    large_files: true
+    conflicts: true
+    line_endings: true
+    tabs: true
+    dockerfile: true
+    shellcheck: true
+  exclude:
+    - "vendor/**"
+    - "public/assets/**"              # compiled frontend assets
+
+docs:
+  readme_inputs: true
+  readme_sync: [dockerhub, ghcr]
+
+security:
+  scan: true
+  sbom: true
+  fail_on_critical: true
+  audit_deps: true
+  secret_findings: alert
+  codebase_audit: true                # invisible characters, Trojan Source, AI prompt injection
+  codebase_audit_threshold: warning
+
+license:
+  compliance: true
+  headers: true
+  spdx: true
+
+templates:
+  golden_files: true
+  gitignore: true
+
+dev:
+  target: dev
+  env:
+    APP_URL: http://localhost:8080
+    DB_HOST: db
+    DB_DATABASE: invoiceninja_dev
+    DB_USERNAME: dev
+    DB_PASSWORD: dev
+    REDIS_HOST: cache
+    MAIL_MAILER: log
+  services:
+    db:
+      image: docker.io/library/mariadb:11
+      env: { MYSQL_ROOT_PASSWORD: dev, MYSQL_DATABASE: invoiceninja_dev, MYSQL_USER: dev, MYSQL_PASSWORD: dev }
+      healthcheck: { test: "mariadb-admin ping -h localhost", interval: 5s }
+    cache:
+      image: docker.io/library/redis:7-alpine
+  ports: ["8080:8080"]
+  volumes:
+    - ./public:/app/public
+  test:
+    startup: { timeout: 45s, depends_on: [db, cache] }
+    healthchecks:
+      - { name: http, type: http, url: "http://localhost:8080/health", expect_status: 200 }
+    sanity:
+      - { name: migrations, run: "php artisan migrate --force" }
+      - { name: seed, run: "php artisan db:seed --class=TestSeeder" }
+      - { name: api-smoke, run: "curl -sf http://localhost:8080/api/v1/ping | jq -e '.ok'" }
+      - { name: tests, run: "php artisan test --stop-on-failure" }
+
+flair:
+  badges: auto
+
+yolo: false

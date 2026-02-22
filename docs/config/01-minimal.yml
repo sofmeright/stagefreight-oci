@@ -1,0 +1,13 @@
+# .stagefreight.yml — Minimal
+#
+# Who: Solo dev, hobby project, just wants the basics.
+# What: Release notes generated from git log, badge SVG updated on release.
+# Build: None — this might be a script repo, a config repo, or something
+#        where the dev handles builds themselves.
+# Why: 4 lines. Zero friction. Immediate value.
+
+version: 1
+
+release:
+  notes: true
+  badge: true

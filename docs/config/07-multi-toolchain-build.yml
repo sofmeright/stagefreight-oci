@@ -1,0 +1,58 @@
+# .stagefreight.yml — Multi-Toolchain Artifact Build
+#
+# Who: Projects that need multiple language toolchains to produce a single
+#      artifact. Go + .NET, Rust + C FFI, Java + native libraries, etc.
+# What: A Dockerfile with multiple FROM stages — each stage brings its own
+#       SDK. Artifacts flow between stages via COPY --from. Final stage
+#       collects everything for extraction.
+# Build: Complex multistage Dockerfile. Output is files, not a container.
+# Why: This was a 50-line CI script with apt-get install and wget. Now it's
+#      a cached, reproducible Dockerfile that works identically on a dev
+#      laptop and in CI.
+
+version: 1
+
+release:
+  notes: true
+  badge: true
+
+build:
+  artifacts:
+    # Windows agent with .NET LibreHardwareMonitor wrapper
+    - name: beszel-agent-windows
+      dockerfile: build/Dockerfile.beszel-windows
+      target: export
+      platforms: [linux/amd64]         # build ON linux, cross-compile TO windows
+      build_args:
+        UPSTREAM_VERSION: "{version}"
+      extract:
+        - from: /out/beszel-agent.exe
+          to: dist/beszel-agent-windows/
+        - from: /out/*.dll
+          to: dist/beszel-agent-windows/
+      package:
+        - type: zip
+          name: "beszel-agent-windows-{version}.zip"
+          contents: dist/beszel-agent-windows/
+
+    # Linux agent (simpler — Go only, no .NET needed)
+    - name: beszel-agent-linux
+      dockerfile: build/Dockerfile.beszel-linux
+      target: export
+      matrix:
+        - { goarch: amd64, suffix: linux-amd64 }
+        - { goarch: arm64, suffix: linux-arm64 }
+      extract:
+        - from: /out/beszel-agent
+          to: "dist/beszel-agent-{suffix}/"
+      package:
+        - type: tar.gz
+          name: "beszel-agent-{version}-{suffix}.tar.gz"
+          contents: "dist/beszel-agent-{suffix}/"
+
+  release_assets: true
+
+security:
+  scan: true
+  audit_deps: true
+  sbom: true

@@ -1,0 +1,79 @@
+# .stagefreight.yml — Multi-Image from One Dockerfile
+#
+# Who: Teams with a monolithic codebase that produces multiple deployable
+#      components — app server, background workers, migration runners,
+#      cron jobs — all from shared code.
+# What: One Dockerfile with multiple named stages. Each stage becomes a
+#       separate image with its own registry path and tags. Shared layer
+#       cache across all targets.
+# Build: Multistage Dockerfile targeting different stages per image.
+# Why: Avoids duplicating Dockerfiles for each component. One source of
+#      truth for the build, multiple outputs.
+
+version: 1
+
+release:
+  notes: true
+
+docker:
+  dockerfile: Dockerfile
+  platforms: [linux/amd64, linux/arm64]
+
+  images:
+    - name: app
+      target: production
+      registries:
+        - url: docker.io
+          path: prplanit/myservice
+          tags: ["{version}", latest]
+        - url: ghcr.io
+          path: sofmeright/myservice
+          tags: ["{version}", latest]
+
+    - name: worker
+      target: worker
+      registries:
+        - url: docker.io
+          path: prplanit/myservice-worker
+          tags: ["{version}", latest]
+
+    - name: migrations
+      target: migrate
+      platforms: [linux/amd64]         # migrations only run on amd64
+      registries:
+        - url: docker.io
+          path: prplanit/myservice-migrations
+          tags: ["{version}"]
+
+    - name: cron
+      target: cron
+      registries:
+        - url: docker.io
+          path: prplanit/myservice-cron
+          tags: ["{version}", latest]
+
+security:
+  scan: true
+
+dev:
+  target: dev
+  env:
+    DATABASE_URL: postgres://dev:dev@db:5432/myservice_dev
+    REDIS_URL: redis://cache:6379
+    WORKER_CONCURRENCY: "2"
+  services:
+    db:
+      image: docker.io/library/postgres:17-alpine
+      env: { POSTGRES_USER: dev, POSTGRES_PASSWORD: dev, POSTGRES_DB: myservice_dev }
+      healthcheck: { test: "pg_isready -U dev", interval: 5s }
+    cache:
+      image: docker.io/library/redis:7-alpine
+  ports: ["8080:8080", "9090:9090"]
+  test:
+    startup: { timeout: 30s, depends_on: [db, cache] }
+    healthchecks:
+      - { name: http, type: http, url: "http://localhost:8080/health", expect_status: 200 }
+      - { name: metrics, type: http, url: "http://localhost:9090/metrics", expect_status: 200 }
+    sanity:
+      - { name: migrations, run: "./manage.py migrate --check" }
+      - { name: smoke, run: "curl -sf http://localhost:8080/api/status | jq -e '.ok'" }

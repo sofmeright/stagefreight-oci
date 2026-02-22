@@ -1,0 +1,93 @@
+# .stagefreight.yml — Compliance-Strict (Regulated Industry)
+#
+# Who: Teams in regulated industries — healthcare, finance, government,
+#      defense contractors. Compliance is mandatory, not optional.
+# What: Every security and license feature turned on and set to fail.
+#       SBOM generation is required. License headers are enforced.
+#       Secret scanning alerts go to the security team. No YOLO.
+# Build: Locked-down image with provenance tracking.
+# Why: Auditors want proof. StageFreight generates the artifacts they need —
+#      SBOMs, license reports, dependency audits, signed builds — automatically.
+
+version: 1
+source: true
+
+release:
+  notes: true
+  badge: true
+
+docker:
+  platforms: [linux/amd64]            # regulated environments often single-arch
+  registries:
+    - url: registry.prplanit.com
+      path: compliance/patient-portal
+      tags: ["{version}", "{version}-{sha:.7}"]
+      branches: [main, release/*]     # only main and release branches
+  rebuild:
+    schedule: daily                   # daily rebuild checks for CVEs
+    on_base_update: true
+    notify: true
+
+lint:
+  level: full                         # regulated = scan everything, not just changed files
+  modules:
+    secrets: true
+    unicode: true
+    yaml: true
+    large_files: true
+    large_files_max: 200KB            # stricter file size limit for compliance repos
+    conflicts: true
+    line_endings: true
+    tabs: true
+    dockerfile: true
+    shellcheck: true
+
+security:
+  scan: true
+  sbom: true
+  fail_on_critical: true              # block release if critical CVEs found
+  audit_deps: true
+  secret_findings: alert              # never MRs — discrete alerts only
+  codebase_audit: true                # invisible characters, Trojan Source, AI prompt injection
+  codebase_audit_fix: false           # report only — no auto-fix in regulated codebases
+  codebase_audit_threshold: warning   # fail CI on warning or above
+
+license:
+  compliance: true                    # fail if incompatible licenses detected
+  headers: true                       # enforce SPDX headers in all source files
+  spdx: true                         # generate SPDX documents per release
+
+templates:
+  golden_files: true                  # SECURITY.md, CODE_OF_CONDUCT.md, etc.
+  gitignore: true
+
+dev:
+  target: dev
+  env:
+    DATABASE_URL: postgres://dev:dev@db:5432/portal_dev
+    FHIR_SERVER_URL: http://fhir-mock:8080
+    AUDIT_LOG_LEVEL: verbose
+  services:
+    db:
+      image: docker.io/library/postgres:17-alpine
+      env: { POSTGRES_USER: dev, POSTGRES_PASSWORD: dev, POSTGRES_DB: portal_dev }
+      healthcheck: { test: "pg_isready -U dev", interval: 5s }
+    fhir-mock:
+      image: docker.io/library/nginx:alpine
+      # Mock FHIR server for dev — replace with real mock image
+  ports: ["8443:8443"]
+  test:
+    startup: { timeout: 30s, depends_on: [db, fhir-mock] }
+    healthchecks:
+      - { name: https, type: http, url: "https://localhost:8443/health", expect_status: 200 }
+    sanity:
+      - { name: migrations, run: "./manage.py migrate --check" }
+      - { name: audit-log-test, run: "./manage.py test audit --verbosity=2" }
+      - { name: hipaa-checks, run: "./scripts/verify-phi-encryption.sh" }
+      - { name: full-suite, run: "pytest tests/ --tb=short -x" }
+    teardown: always
+
+flair:
+  badges: auto
+
+yolo: false                           # absolutely not

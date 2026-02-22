@@ -1,0 +1,67 @@
+# .stagefreight.yml — S6-Overlay / LinuxServer.io Style Image
+#
+# Who: Image maintainers following the LinuxServer.io pattern — S6-overlay
+#      init system, PUID/PGID support, custom cont-init.d scripts, abc user.
+#      Common for self-hosted application images.
+# What: Multi-platform image with LSCR-style tagging convention. S6-overlay
+#       adds complexity to Dockerfile and startup — healthchecks need to
+#       account for the init sequence.
+# Build: Dockerfile with S6-overlay, custom init scripts, multi-platform.
+# Why: The LSCR pattern is extremely popular in the self-hosted community.
+#      This example shows StageFreight handling the specific tag conventions
+#      and healthcheck timing that S6 images need.
+
+version: 1
+
+release:
+  notes: true
+  badge: true
+
+docker:
+  platforms: [linux/amd64, linux/arm64, linux/arm/v7]
+  build_args:
+    S6_OVERLAY_VERSION: "3.2.0.2"
+  registries:
+    - url: docker.io
+      path: prplanit/my-s6-app
+      tags:
+        - "{version}"
+        - "{major}.{minor}"
+        - latest
+    - url: ghcr.io
+      path: sofmeright/my-s6-app
+      tags: ["{version}", latest]
+    - url: lscr.io
+      path: sofmeright/my-s6-app
+      tags:
+        - "{version}-ls{build}"       # LinuxServer.io convention
+        - latest
+  rebuild:
+    schedule: weekly
+    on_base_update: true
+
+docs:
+  readme_sync: [dockerhub, ghcr]
+
+security:
+  scan: true
+  sbom: true
+
+dev:
+  env:
+    PUID: "1000"
+    PGID: "1000"
+    TZ: America/New_York
+  ports: ["8080:8080"]
+  volumes:
+    - ./config:/config
+  test:
+    startup: { timeout: 60s }         # S6 init takes time
+    healthchecks:
+      - { name: http, type: http, url: "http://localhost:8080/", expect_status: 200, timeout: 10s }
+    sanity:
+      # Verify S6 services are running
+      - { name: s6-services, run: "s6-rc -a list | grep -q 'svc-main'" }
+      - { name: user-correct, run: "id abc | grep -q 'uid=1000'" }
+
+yolo: true

@@ -1,0 +1,85 @@
+# .stagefreight.yml — Mobile / Hybrid App (Capacitor, React Native, Flutter)
+#
+# Who: Teams building mobile or hybrid apps. The app itself isn't a container,
+#      but the API backend might be, and the build toolchain benefits from
+#      reproducible environments.
+# What: Artifact builds for the mobile bundle (APK, IPA, web bundle), plus
+#       a container build for the API backend. Dev environment runs both
+#       the API and a mock device environment.
+# Build: Artifact build for mobile assets + Docker build for API.
+# Why: Mobile projects have complex build chains (Gradle, Xcode, Metro).
+#      Wrapping them in Dockerfiles makes them reproducible. The API backend
+#      is a standard container build.
+
+version: 1
+
+release:
+  notes: true
+  badge: true
+
+# API backend — standard container image
+docker:
+  dockerfile: api/Dockerfile
+  context: api
+  platforms: [linux/amd64, linux/arm64]
+  registries:
+    - url: docker.io
+      path: prplanit/myapp-api
+      tags: ["{version}", latest]
+
+# Mobile artifacts — extracted from build containers
+build:
+  artifacts:
+    - name: android-apk
+      dockerfile: build/Dockerfile.android
+      target: export
+      platforms: [linux/amd64]
+      build_args:
+        APP_VERSION: "{version}"
+      extract:
+        - from: /out/app-release.apk
+          to: dist/android/
+      package:
+        - type: zip
+          name: "myapp-android-{version}.zip"
+          contents: dist/android/
+
+    - name: web-bundle
+      dockerfile: build/Dockerfile.web
+      target: export
+      platforms: [linux/amd64]
+      extract:
+        - from: /out/dist/
+          to: dist/web/
+      package:
+        - type: tar.gz
+          name: "myapp-web-{version}.tar.gz"
+          contents: dist/web/
+
+  release_assets: true
+
+security:
+  scan: true
+  audit_deps: true
+  sbom: true
+
+dev:
+  env:
+    API_URL: http://localhost:4000
+    DATABASE_URL: postgres://dev:dev@db:5432/myapp_dev
+  services:
+    db:
+      image: docker.io/library/postgres:17-alpine
+      env: { POSTGRES_USER: dev, POSTGRES_PASSWORD: dev, POSTGRES_DB: myapp_dev }
+      healthcheck: { test: "pg_isready -U dev", interval: 5s }
+  ports: ["4000:4000", "8081:8081"]   # API + Metro bundler
+  test:
+    startup: { timeout: 30s, depends_on: [db] }
+    healthchecks:
+      - { name: api, type: http, url: "http://localhost:4000/health", expect_status: 200 }
+    sanity:
+      - { name: api-migrations, run: "cd api && npx prisma migrate deploy" }
+      - { name: api-tests, run: "cd api && npm test" }
+      - { name: app-lint, run: "cd app && npm run lint" }
+      - { name: app-typecheck, run: "cd app && npm run typecheck" }
+      - { name: app-tests, run: "cd app && npm test" }

@@ -1,0 +1,58 @@
+# .stagefreight.yml — Game Server
+#
+# Who: Homelab users and small communities hosting game servers — Minecraft,
+#      Valheim, Factorio, Palworld. Often forked from upstream server images
+#      with custom mods, configs, or performance patches.
+# What: Builds a customized game server image with mods baked in. Non-standard
+#       ports, UDP healthchecks, volume mounts for world data.
+# Build: Dockerfile extending upstream game server image with mods/configs.
+# Why: Game servers are a huge homelab use case. The build is usually
+#      "upstream image + mods folder + config tweaks" and nobody wants to
+#      manually rebuild when the server or mods update.
+
+version: 1
+
+fork:
+  upstream: github.com/itzg/docker-minecraft-server
+  strategy: merge                     # merge, not rebase — mod patches can conflict
+  auto_sync: true
+
+release:
+  notes: true
+
+docker:
+  platforms: [linux/amd64]            # game servers are almost always amd64
+  registries:
+    - url: registry.prplanit.com
+      path: games/minecraft-modded
+      tags: ["{version}", latest]
+  rebuild:
+    schedule: weekly
+    on_base_update: true
+    notify: true
+
+dev:
+  env:
+    EULA: "TRUE"
+    TYPE: FABRIC
+    VERSION: "1.21.4"
+    MEMORY: 4G
+    DIFFICULTY: normal
+    MODE: survival
+    MOTD: "StageFreight Dev Server"
+  ports:
+    - "25565:25565"                   # Minecraft
+    - "25575:25575"                   # RCON
+  volumes:
+    - ./mods:/data/mods
+    - ./config:/data/config
+    - server-data:/data/world
+  test:
+    startup: { timeout: 120s }        # game servers are slow to start
+    healthchecks:
+      - { name: tcp-ready, type: tcp, host: localhost, port: 25565, timeout: 10s }
+    sanity:
+      - { name: rcon-ping, run: "rcon-cli --host localhost --port 25575 --password dev 'list'" }
+    teardown: always
+
+yolo: true                            # it's a game server, just ship it
