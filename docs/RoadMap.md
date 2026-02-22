@@ -23,6 +23,10 @@ StageFreight is evolving from a GitLab CI component with bash scripts into a pla
 │  │    badge update                                       │  │
 │  │    docker build | build                               │  │
 │  │    lint                                               │  │
+│  │    test                                               │  │
+│  │    deps pull | deps verify | deps cache               │  │
+│  │    docker verify                                      │  │
+│  │    approve                                            │  │
 │  │    security scan                                      │  │
 │  │    dev build | dev test | dev up                      │  │
 │  │    sync readme | sync metadata                        │  │
@@ -244,7 +248,132 @@ Rewrite existing bash/Python logic as Go subcommands. No new features, just pari
 | `stagefreight docker build` | Docker build bash scripts | Flexible multi-registry, multi-arch, multi-OS container image build+push engine (see below) |
 | `stagefreight build` | Raw CI scripts (apt-get, wget, etc.) | Artifact builds — multi-toolchain Dockerfile pipelines that output binaries, zips, packages instead of images (see below) |
 | `stagefreight lint` | Pre-commit hooks, manual checks | Cache-aware, delta-only code quality gate that runs before every build (see below) |
+| `stagefreight test` | Scattered CI test scripts, Makefile targets | Structured, delta-aware testing engine — scoped tests across source/binary/container contexts with declarative HTTP/gRPC/exec/schema primitives (see below) |
 | `stagefreight security scan` | Trivy bash wrapper | Trivy orchestration, SBOM generation, vendor-specific result upload |
+| `stagefreight approve` | Manual CI/CD gates, Slack "approve" buttons | Human-in-the-loop approval gates — OIDC SSO approval flow for dangerous operations with audit logging (see below) |
+| `stagefreight version stamp` | Manual find-and-replace across files | Unified metadata injection — version, description, license, URLs across all project files (see below) |
+
+#### `stagefreight version stamp` — Metadata Synchronization
+
+Every project scatters the same metadata across a dozen files: version strings in `go.mod`, `Cargo.toml`, `package.json`, Dockerfile LABELs, Helm Chart.yaml, OCI annotations, README badges, `--version` CLI output, and copyright headers. Today you update them by hand (miss one, ship stale info) or write fragile sed scripts in CI. StageFreight makes this declarative.
+
+**The problem:** A Go CLI embeds its version via `-ldflags`, the Dockerfile has `org.opencontainers.image.version`, `Chart.yaml` has `appVersion`, the README shows a badge, and the LICENSE file has a copyright year. Change any one of them and the rest go stale. Multiply by every repo in the org.
+
+**What `stagefreight version stamp` does:**
+
+1. Reads version + metadata from a single source of truth:
+   - **Tag-driven (default):** version is the git tag. Everything else comes from the manifest or is inferred.
+   - **Manifest-driven:** explicitly declared in `.stagefreight.yml` under `metadata:`.
+   - **Hybrid:** tag sets the version, manifest provides description/license/URLs/motto.
+2. Stamps that metadata into every file that references it, using per-ecosystem conventions.
+3. In CI: runs automatically before build. In daemon mode: runs on tag push.
+4. Locally: `stagefreight version stamp --dry-run` shows what would change.
+
+**Manifest config:**
+```yaml
+metadata:
+  # These are the canonical values — single source of truth
+  name: stagefreight                          # project name
+  description: "Repository Lifecycle Steward" # one-liner
+  motto: "Hello World's a Stage"              # slogan/tagline (optional)
+  license: AGPL-3.0-only                      # SPDX identifier
+  homepage: https://stagefreight.dev          # project URL
+  repository: https://gitlab.prplanit.com/precisionplanit/stagefreight-oci
+  author: "SoFMeRight <sofmeright@gmail.com>"
+
+  # Version source — where the version number comes from
+  # "tag" (default): latest git tag, stripped of 'v' prefix
+  # "file:<path>": read from a specific file (e.g., VERSION)
+  # "manifest": use the version field below
+  version_source: tag
+  # version: 1.2.3                           # only used when version_source: manifest
+
+  # Stamp targets — where metadata gets written
+  # Auto-detected by default; explicit list overrides auto-detection
+  stamp:
+    # Go: injects via -ldflags at build time (no file modification needed)
+    - type: go
+      package: gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/version
+      vars:
+        Version: "{version}"
+        Description: "{description}"
+        License: "{license}"
+        BuildDate: "{build_date}"
+        Commit: "{commit_sha}"
+
+    # Rust: updates version in Cargo.toml
+    - type: cargo
+      file: Cargo.toml
+      fields: [version, description, license, homepage, repository]
+
+    # Node: updates version in package.json
+    - type: npm
+      file: package.json
+      fields: [version, description, license, homepage, repository, author]
+
+    # Docker: updates LABEL instructions in Dockerfile
+    - type: dockerfile
+      file: Dockerfile
+      labels:
+        org.opencontainers.image.version: "{version}"
+        org.opencontainers.image.title: "{name}"
+        org.opencontainers.image.description: "{description}"
+        org.opencontainers.image.licenses: "{license}"
+        org.opencontainers.image.source: "{repository}"
+        org.opencontainers.image.url: "{homepage}"
+        org.opencontainers.image.revision: "{commit_sha}"
+        org.opencontainers.image.created: "{build_date}"
+
+    # Helm: updates Chart.yaml
+    - type: helm
+      file: charts/stagefreight/Chart.yaml
+      fields: [version, appVersion, description, home]
+
+    # Generic: regex-based find-and-replace for any file
+    - type: generic
+      file: README.md
+      replacements:
+        - pattern: 'Version: .*'
+          replace: 'Version: {version}'
+        - pattern: '!\[version\]\(.*\)'
+          replace: '![version](https://img.shields.io/badge/version-{version}-blue)'
+
+    # Version file: write a plain VERSION file (consumed by other tools)
+    - type: file
+      file: VERSION
+      content: "{version}"
+```
+
+**Auto-detection (zero config):** Without an explicit `stamp:` list, StageFreight scans the repo and stamps everything it recognizes:
+
+| File | What gets stamped |
+|---|---|
+| `go.mod` / Go source with `version` package | `-ldflags` injection at build time |
+| `Cargo.toml` | `version`, `description`, `license`, `homepage`, `repository` |
+| `package.json` | `version`, `description`, `license`, `homepage`, `repository` |
+| `Dockerfile` | OCI labels (`org.opencontainers.image.*`) |
+| `Chart.yaml` | `version`, `appVersion`, `description`, `home` |
+| `setup.py` / `pyproject.toml` | `version`, `description`, `license`, `url` |
+| `*.csproj` | `Version`, `Description`, `PackageLicenseExpression` |
+| `LICENSE` / `LICENSE.md` | Copyright year (updates `2024` → `2024-2026`) |
+
+**Tag-driven workflow (the golden path):**
+
+```
+$ git tag v1.3.0
+$ git push --tags
+  → CI pipeline starts
+  → stagefreight version stamp       # injects v1.3.0 everywhere
+  → stagefreight lint                 # quality gate
+  → stagefreight docker build         # builds with correct version baked in
+  → stagefreight release create       # creates release with notes + assets
+```
+
+The developer tags, pushes, and walks away. Every file in the repo that references the version, description, license, or URLs is updated automatically. The Go binary reports `stagefreight version 1.3.0 (commit abc1234, built 2026-02-22)`. The Docker image has correct OCI labels. The Helm chart has the right `appVersion`. No manual editing. No stale metadata.
+
+**Dev builds:** When there's no tag (feature branch, local dev), version stamp generates a dev version: `0.0.0-dev+abc1234` (or `{last_tag}-dev+{sha}` if a previous tag exists). This ensures `--version` output is always meaningful, even in development.
+
+**Build integration:** `stagefreight docker build` and `stagefreight build` automatically run `version stamp` before building. The version is injected into the build context so Dockerfiles and build scripts always have access to correct metadata. For Go, this means `-ldflags` are set automatically — no manual `go build -ldflags "-X main.version=..."` incantation.
 
 #### `stagefreight lint` — Built-In Code Quality Gate
 
@@ -778,6 +907,726 @@ dev:
 
 **CI parity:** In a pipeline, `stagefreight dev test` runs identically — same manifest, same checks, same pass/fail criteria. The only difference is CI pushes the image to registries afterward if tests pass. The daemon uses the same test suite for scheduled rebuild validation before pushing patched images.
 
+#### `stagefreight test` — Structured Testing Engine
+
+The `dev.test` section above is the simple case — healthchecks and sanity commands against a running container. But real projects need more: unit tests that run before the build, integration tests that run against the binary, API contract tests that run against the container, and all of them should only run when relevant code changes. Today this means writing CI scripts until sunset with zero consistency between projects.
+
+StageFreight's testing engine makes 80-90% of common test patterns declarative. You describe *what* to test, *when* it's relevant, and *what context* it runs in. StageFreight handles scheduling, scoping, parallelism, and reporting. The remaining 10-20% stays as custom scripts — but even those get structured metadata (name, scope, timeout, expected outcome) so they participate in the same delta-aware scheduling.
+
+**Two dimensions: context and scope.**
+
+Every test has a **context** (when it can run) and a **scope** (when it should run):
+
+| Context | Runs against | Available when | Examples |
+|---|---|---|---|
+| `source` | Source files on disk | Always — no build required | Unit tests, static analysis, schema validation, config checks, contract tests against specs |
+| `binary` | Built artifacts | After `stagefreight build` | CLI smoke tests, binary flag validation, output format checks, cross-compile verification |
+| `container` | Running container | After `stagefreight docker build` | HTTP endpoint probes, healthchecks, API integration tests, database migration checks, e2e flows |
+
+Context determines the *environment* the test executes in. `source` tests run on the host against files. `binary` tests run on the host against built artifacts. `container` tests run against (or inside) a running container with optional service dependencies.
+
+**Scope** determines *whether* a test runs at all. A test declares what code it depends on — files, functions, packages, API routes, database schemas. StageFreight's delta engine (same one that powers lint) compares the scope against what changed. If nothing in the test's scope changed, the test is skipped with a cached pass. If something changed, the test runs.
+
+```
+$ stagefreight test
+  source  ✓ 4 passed, 12 skipped (unchanged), 0.3s
+  binary  ✓ 2 passed, 5 skipped (unchanged), 1.1s
+  container ✓ 3 passed, 8 skipped (unchanged), 2.4s
+  total: 9 passed, 25 skipped, 0 failed (3.8s)
+```
+
+On a change that only touches `src/auth/token.go`:
+
+```
+$ stagefreight test
+  source  ✓ 2 passed (token-validation, token-expiry), 10 skipped, 0.2s
+  binary  ✓ 1 passed (cli-auth-flag), 6 skipped, 0.4s
+  container ✓ 1 passed (auth-api-endpoints), 10 skipped, 1.8s
+  total: 4 passed, 26 skipped, 0 failed (2.4s)
+```
+
+Only tests whose scope overlaps with the changed file ran. Everything else was a cached skip.
+
+**Declarative test types — the 80-90%:**
+
+Most tests across most projects fall into a handful of patterns. StageFreight provides built-in test types that express these patterns as structured config instead of scripts:
+
+```yaml
+test:
+  # --- Source context tests (pre-build) ---
+
+  - name: go-unit-tests
+    context: source
+    type: go-test                     # built-in: runs `go test`
+    scope:
+      packages: ["./src/..."]         # only run when these packages change
+    args: ["-race", "-count=1"]
+    timeout: 2m
+
+  - name: schema-valid
+    context: source
+    type: json-schema                 # built-in: validate files against JSON Schema
+    scope:
+      files: ["api/openapi.yml"]
+    schema: api/openapi.yml
+    validate:
+      - "api/examples/*.json"
+
+  - name: config-syntax
+    context: source
+    type: yaml-valid                  # built-in: YAML parse + optional schema check
+    scope:
+      files: [".stagefreight.yml", "config/*.yml"]
+    files: [".stagefreight.yml", "config/*.yml"]
+
+  - name: sql-migrations-ordered
+    context: source
+    type: file-check                  # built-in: assert files exist, match patterns, are ordered
+    scope:
+      files: ["migrations/*.sql"]
+    checks:
+      - sequential_names: true        # 001_init.sql, 002_users.sql — no gaps
+      - no_down_without_up: true      # every down migration has a matching up
+
+  - name: proto-compat
+    context: source
+    type: command                     # escape hatch — run any command
+    scope:
+      files: ["proto/**/*.proto"]
+    run: "buf breaking --against .git#branch=main"
+    expect:
+      exit_code: 0
+
+  # --- Binary context tests (post-build, pre-container) ---
+
+  - name: cli-version-flag
+    context: binary
+    type: exec                        # built-in: run binary, check output
+    scope:
+      files: ["src/version/**", "src/cli/cmd/version.go"]
+    command: "./dist/stagefreight version"
+    expect:
+      exit_code: 0
+      stdout_contains: "stagefreight"
+      stdout_not_contains: "unknown"
+
+  - name: cli-help-all-commands
+    context: binary
+    type: exec
+    scope:
+      files: ["src/cli/cmd/*.go"]
+    command: "./dist/stagefreight --help"
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "docker build"
+        - "lint"
+        - "version"
+
+  - name: binary-size-check
+    context: binary
+    type: file-check
+    scope:
+      files: ["src/**/*.go", "go.mod", "go.sum"]
+    checks:
+      - path: "./dist/stagefreight"
+        max_size: 50MB                # alert if binary bloats past threshold
+
+  # --- Container context tests (running container) ---
+
+  - name: health-endpoint
+    context: container
+    type: http                        # built-in: HTTP request + response validation
+    scope:
+      files: ["src/handlers/health.go", "src/server.go"]
+    request:
+      method: GET
+      url: /health
+    expect:
+      status: 200
+      max_latency: 500ms
+      body_json:
+        status: "ok"
+
+  - name: auth-api-endpoints
+    context: container
+    type: http
+    scope:
+      files: ["src/auth/**", "src/handlers/auth*.go", "src/middleware/auth.go"]
+      # Scope can reference API routes — StageFreight maps routes to handler files
+      routes: ["/api/v1/auth/**"]
+    requests:
+      - name: login-valid
+        method: POST
+        url: /api/v1/auth/login
+        body: '{"username": "testuser", "password": "testpass"}'
+        headers:
+          Content-Type: application/json
+        expect:
+          status: 200
+          body_json_path:
+            "$.token": { not_empty: true }
+            "$.expires_in": { gte: 3600 }
+
+      - name: login-invalid
+        method: POST
+        url: /api/v1/auth/login
+        body: '{"username": "testuser", "password": "wrong"}'
+        expect:
+          status: 401
+
+      - name: protected-without-token
+        method: GET
+        url: /api/v1/users/me
+        expect:
+          status: 401
+
+      - name: protected-with-token
+        method: GET
+        url: /api/v1/users/me
+        headers:
+          Authorization: "Bearer {from_step: login-valid, json_path: $.token}"
+        expect:
+          status: 200
+          body_json_path:
+            "$.username": "testuser"
+
+  - name: database-migrations
+    context: container
+    type: command
+    scope:
+      files: ["migrations/**"]
+    depends_on: [db]                  # ensure db service is up first
+    run: "./manage.py migrate --check"
+    expect:
+      exit_code: 0
+
+  - name: grpc-reflection
+    context: container
+    type: grpc                        # built-in: gRPC endpoint probing
+    scope:
+      files: ["proto/**", "src/grpc/**"]
+    endpoint: localhost:50051
+    checks:
+      - reflection: true              # server supports reflection
+      - service: myapp.v1.UserService # service is registered
+      - method: GetUser               # method exists
+        request: '{"id": "test-1"}'
+        expect:
+          status: OK
+          body_json_path:
+            "$.name": { not_empty: true }
+```
+
+**Built-in test types:**
+
+| Type | Context | What it does |
+|---|---|---|
+| `go-test` | source | Runs `go test` with package filtering and args. Knows Go test conventions. |
+| `npm-test` | source | Runs `npm test` or `jest`/`vitest` with file filtering. |
+| `pytest` | source | Runs `pytest` with path filtering, markers, and fixtures. |
+| `cargo-test` | source | Runs `cargo test` with package filtering. |
+| `json-schema` | source | Validates files against a JSON Schema. |
+| `yaml-valid` | source | Parses YAML files, optionally validates against schema. |
+| `file-check` | source, binary | Asserts file existence, size, permissions, content patterns, naming conventions. |
+| `exec` | binary | Runs a binary, checks exit code + stdout/stderr content. |
+| `http` | container | HTTP request with full response validation (status, headers, body, latency, JSON path assertions). |
+| `tcp` | container | TCP port probe with timeout. |
+| `grpc` | container | gRPC endpoint probing — reflection, service listing, method calls with assertions. |
+| `websocket` | container | WebSocket connection, message exchange, assertions. |
+| `command` | any | Escape hatch — run any command. Structured metadata (scope, timeout, expect) still applies. |
+
+Every built-in type understands its domain. `http` knows about status codes, headers, JSON path queries, and request chaining (use a token from step A in step B). `go-test` knows about Go package paths and test binary caching. `grpc` knows about reflection and protobuf. The developer describes *what* to verify, not *how* to shell out to curl and parse the output.
+
+**Scope mechanics — how delta-aware test selection works:**
+
+Scope is the key differentiator. Every test declares what it depends on, and StageFreight skips tests whose dependencies haven't changed. Scope supports several selectors:
+
+| Selector | What it means | Example |
+|---|---|---|
+| `files` | Glob patterns for source files | `["src/auth/**", "src/middleware/auth.go"]` |
+| `packages` | Language-aware package paths | `["./src/handlers/...", "./src/models/..."]` |
+| `functions` | Specific function names in specific files | `["src/auth/token.go:ValidateToken", "src/auth/token.go:RefreshToken"]` |
+| `routes` | API route patterns | `["/api/v1/users/**", "/api/v1/auth/**"]` |
+| `tags` | Arbitrary labels for manual grouping | `["auth", "payments", "critical"]` |
+| `always` | Always run regardless of changes | `true` — for smoke tests, health checks |
+
+How selectors resolve:
+
+- **`files`** — compared directly against the git delta (same engine as lint). Glob match against changed file paths.
+- **`packages`** — resolved to files via the language's module system (Go: `go list`, Node: package.json workspaces, Python: module paths). Then compared against the delta.
+- **`functions`** — StageFreight parses the source file for the named function/method and tracks the line span. If the delta includes changes within that span (or to imports the function uses), the test runs. This uses tree-sitter or language-specific regex parsing — not a full compiler. Approximate is fine because false positives (test runs unnecessarily) are safe; false negatives (test doesn't run when it should) are caught by the `always` fallback tests.
+- **`routes`** — StageFreight parses route definitions from the framework's conventions (Go: `http.HandleFunc`, `gin.GET`, `echo.POST`; Node: `express.get`, `fastify.route`; Python: `@app.route`, `@router.get`). A route maps to its handler file. If the handler file changed, tests scoped to that route run.
+- **`tags`** — manual grouping. `stagefreight test --tag auth` runs all tests tagged `auth` regardless of delta. Useful for targeted debugging.
+- **`always`** — the test always runs. Use for critical smoke tests where the cost of a false negative is too high.
+
+When no `scope` is defined on a test, it defaults to `always: true` — backward compatible with the simple case where you just want tests to run every time.
+
+**Scope composition — implicit dependencies:**
+
+StageFreight also infers implicit scope from the test type:
+
+- A `go-test` for `./src/auth/...` automatically includes `go.mod` and `go.sum` in its scope (dependency changes affect test results).
+- An `http` test against a container automatically includes the Dockerfile and any files `COPY`'d into the image (if the image changed, the test is relevant).
+- A `command` test that runs `./dist/myapp` automatically includes the binary itself (if the binary changed, the test is relevant).
+
+Inferred scope is merged with explicit scope. You can disable it with `scope.infer: false` if needed.
+
+**Test chaining and data flow:**
+
+Container tests often need state from earlier steps — a login token, a created resource ID, a session cookie. Rather than forcing everything into a single script, StageFreight supports structured data flow between test steps:
+
+```yaml
+- name: user-crud-flow
+  context: container
+  type: http
+  scope:
+    routes: ["/api/v1/users/**"]
+  requests:
+    - name: create-user
+      method: POST
+      url: /api/v1/users
+      body: '{"name": "Test User", "email": "test@example.com"}'
+      expect:
+        status: 201
+        body_json_path:
+          "$.id": { not_empty: true, capture_as: user_id }
+
+    - name: get-user
+      method: GET
+      url: "/api/v1/users/{captured: user_id}"
+      expect:
+        status: 200
+        body_json_path:
+          "$.name": "Test User"
+
+    - name: delete-user
+      method: DELETE
+      url: "/api/v1/users/{captured: user_id}"
+      expect:
+        status: 204
+
+    - name: get-deleted-user
+      method: GET
+      url: "/api/v1/users/{captured: user_id}"
+      expect:
+        status: 404
+```
+
+Values captured in earlier steps are available to later steps via `{captured: name}` or `{from_step: step_name, json_path: $.field}`. This replaces the common pattern of piping curl output through jq in a shell script — same logic, structured and readable.
+
+**Parallel execution and ordering:**
+
+- Tests within the same context run in parallel by default (each gets its own goroutine/container).
+- Tests with `depends_on` run after their dependencies pass.
+- Tests with `sequential: true` run in declaration order (for stateful sequences like the CRUD flow above).
+- Cross-context ordering is automatic: `source` tests run before `binary` tests, which run before `container` tests. If source tests fail, binary and container tests are skipped — no point testing a binary built from broken source.
+
+```
+stagefreight test
+  │
+  ├── source tests (parallel)     ← pre-build, against files
+  │     ├── go-unit-tests
+  │     ├── schema-valid
+  │     ├── config-syntax
+  │     └── sql-migrations-ordered
+  │
+  ├── [build happens here if binary/container tests exist]
+  │
+  ├── binary tests (parallel)     ← post-build, against artifacts
+  │     ├── cli-version-flag
+  │     ├── cli-help-all-commands
+  │     └── binary-size-check
+  │
+  ├── [container starts here if container tests exist]
+  │
+  └── container tests (parallel, some sequential within)
+        ├── health-endpoint
+        ├── auth-api-endpoints (sequential internally)
+        ├── database-migrations
+        └── grpc-reflection
+```
+
+**Build integration:**
+
+`stagefreight test` runs the full pipeline: source → build → binary → container. But each context also integrates with its natural build phase:
+
+- `stagefreight docker build` runs source and binary tests automatically (same as lint — unless `--skip-test`). Container tests run if `--test` is passed.
+- `stagefreight build` runs source tests before building, binary tests after.
+- `stagefreight dev test` is the container-focused entrypoint — it builds, starts services, and runs all three contexts.
+- `stagefreight test --context source` runs only source tests (fast, no build needed).
+- `stagefreight test --context container` runs all contexts up to and including container.
+- `stagefreight test --tag auth` runs only tests tagged `auth`, in whatever contexts they belong to.
+
+**Cache integration:**
+
+Test results are cached the same way lint results are cached — content-addressed by `(scope file hashes, test config hash, engine version)`. A test whose scope hasn't changed and whose config hasn't changed is a cached pass. The cache lives in `.stagefreight/cache/test/`. In CI, persistent caches across runs make the common case (nothing changed in this test's scope) effectively free.
+
+**Manifest config:**
+
+```yaml
+test:
+  # Global test settings
+  parallel: true                    # run tests in parallel within each context (default: true)
+  fail_fast: false                  # stop on first failure (default: false)
+  timeout: 10m                      # global timeout for entire test suite
+
+  # Container test settings (shared by all container-context tests)
+  container:
+    startup:
+      timeout: 30s
+      depends_on: [db, cache]       # services to start before container tests
+    base_url: http://localhost:8080  # default base URL for HTTP tests
+    teardown: always                # always | on-success | never
+
+  # Test definitions (source, binary, and container contexts interleaved)
+  cases:
+    - name: go-unit-tests
+      context: source
+      type: go-test
+      scope:
+        packages: ["./src/..."]
+      args: ["-race"]
+      # ... (as shown above)
+```
+
+**Zero-config behavior:** Without a `test:` section, `stagefreight test` looks for conventional test commands:
+- Go project → `go test ./...`
+- Node project → `npm test`
+- Python project → `pytest`
+- Rust project → `cargo test`
+- Dockerfile with HEALTHCHECK → HTTP probe against exposed ports
+
+The conventional tests run without scoping (full run every time). Adding a `test:` section with explicit scopes is how you get delta-aware test selection.
+
+#### `stagefreight approve` — Human-in-the-Loop Approval Gates
+
+Some operations are too dangerous to run unattended. Pushing directly to a production registry, force-merging without review, running yolo mode in a pipeline — these are actions where automation should pause and wait for a human to explicitly say "yes, do it." Not a confirmation prompt in a terminal. A real approval flow: notification sent, identity verified, decision recorded.
+
+**The problem:** CI/CD pipelines are all-or-nothing. Either the pipeline has credentials and auto-pushes (hope nobody pushes a bad commit), or every push requires manual intervention (defeats the point of automation). YOLO mode in StageFreight automates MR creation and merging — but "auto-merge everything" is a trust level that not every action deserves. Some operations need a human gate without losing the automation.
+
+**What `stagefreight approve` does:**
+
+1. The pipeline (or CLI) reaches an action that requires approval.
+2. StageFreight sends an approval request via configured notification channel — SMTP, ntfy, SMS, or stdout.
+3. The request contains a link to an approval page hosted by `stagefreight serve`.
+4. The user clicks the link, authenticates, reviews the action, and accepts or denies.
+5. The pipeline resumes or aborts based on the decision.
+6. Everything is logged — who approved, when, what they approved, and any notes they attached.
+
+**Notification delivery — how the approval request reaches you:**
+
+| Channel | How it works |
+|---|---|
+| **SMTP** | Email with branded template — org logo, action summary, approval link. Works everywhere. |
+| **ntfy** | Push notification via ntfy topic. Instant on mobile. Link opens in browser. |
+| **SMS** | Via configurable SMS provider API (Twilio, etc.). Approval link in the message body. |
+| **stdout** | Prints the approval URL to the terminal. For local dev and debugging. No external service needed. |
+
+Channels are configured globally in the daemon config or per-repo in the manifest. Multiple channels can fire simultaneously (email + ntfy push). The notification is a one-way alert — authentication and approval happen on the approval page, never in the notification itself.
+
+**The approval page — two-phase disclosure:**
+
+The approval page is a web UI served by `stagefreight serve`. It uses a two-phase information model to balance security with usability:
+
+**Phase 1 — Pre-authentication (public landing page):**
+
+The page shows minimal, low-risk information. Enough for the user to know *something* needs their attention, not enough to leak details to an unauthorized viewer.
+
+```
+┌──────────────────────────────────────────────────┐
+│  [Org Logo]  PrecisionPlanIT                     │
+│                                                  │
+│  An action requires your approval.               │
+│                                                  │
+│  Requested: 2 minutes ago                        │
+│  Expires: in 28 minutes                          │
+│                                                  │
+│  ┌──────────────────────────────────────────┐    │
+│  │  Sign in to review details               │    │
+│  │                                          │    │
+│  │  [Continue with SSO]                     │    │
+│  │                                          │    │
+│  └──────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────┘
+```
+
+No repo name, no branch, no action type. Just "something needs approval" and a sign-in button. If an attacker intercepts the notification link, they see nothing useful and can't act without valid credentials.
+
+**Phase 2 — Post-authentication (full details):**
+
+After OIDC SSO login (or other auth method), the authorized user sees everything:
+
+```
+┌──────────────────────────────────────────────────┐
+│  [Org Logo]  PrecisionPlanIT                     │
+│  Signed in as: kai@precisionplanit.com           │
+│                                                  │
+│  ── Action Details ──────────────────────────     │
+│                                                  │
+│  Action:  docker push (3 registries)             │
+│  Repo:    precisionplanit/stagefreight-oci       │
+│  Branch:  main                                   │
+│  Commit:  abc1234 — "add multi-arch build"       │
+│  Trigger: yolo mode — auto-push after merge      │
+│                                                  │
+│  Tags to push:                                   │
+│    docker.io/prplanit/stagefreight:1.2.3         │
+│    docker.io/prplanit/stagefreight:latest        │
+│    ghcr.io/sofmeright/stagefreight:1.2.3         │
+│                                                  │
+│  Lint:  ✓ passed (0.3s)                          │
+│  Test:  ✓ 12 passed (8.1s)                       │
+│  Scan:  ✓ 0 critical, 2 low                      │
+│                                                  │
+│  ┌─────────────────────────────────────┐         │
+│  │ Note (optional):                    │         │
+│  │ __________________________________ │         │
+│  │ __________________________________ │         │
+│  └─────────────────────────────────────┘         │
+│                                                  │
+│  [Approve]              [Deny]                   │
+│                                                  │
+│  Expires: in 26 minutes                          │
+└──────────────────────────────────────────────────┘
+```
+
+The user sees exactly what they're approving — the action, the context, the safety checks that passed, and the artifacts that will be produced. They can attach an optional note explaining why they approved or denied (for audit trail and accounting). Then they click Approve or Deny.
+
+**Authentication methods:**
+
+| Method | Priority | Notes |
+|---|---|---|
+| **OIDC SSO** | Primary, implement first | Preferred path. Uses existing identity provider (Zitadel, Keycloak, Auth0, etc.). Single sign-on — if you're already logged in, one click. No additional secret to manage. |
+| **Passkey / WebAuthn** | High | FIDO2 hardware keys (YubiKey), platform authenticators (Touch ID, Windows Hello). Strongest security — phishing-resistant, no shared secret. No additional auth step if the key is the SSO credential. |
+| **TOTP** | Medium | Time-based one-time password (Google Authenticator, Authy). Fallback for environments without SSO. Works offline. |
+| **Email OTP** | Low | One-time code sent to email. Last-resort fallback. Depends on email delivery. |
+
+The priority implementation path: OIDC SSO first, everything else later. SSO covers the primary use case (team with an identity provider). Passkey support follows naturally since most OIDC providers support WebAuthn as a second factor. TOTP and email OTP are escape hatches for environments that can't do SSO.
+
+**Pipeline-side flow — how the waiting process works:**
+
+```
+stagefreight docker build --push
+  │
+  ├── lint ✓
+  ├── build ✓
+  ├── test ✓
+  │
+  ├── approval required (push to 3 registries)
+  │     │
+  │     ├── send notification (smtp + ntfy)
+  │     ├── print: "⏳ Awaiting approval: https://sf.prplanit.com/approve/abc123"
+  │     │
+  │     ├── poll loop (5s interval)
+  │     │     ├── GET /api/approve/abc123/status → "pending"
+  │     │     ├── GET /api/approve/abc123/status → "pending"
+  │     │     ├── GET /api/approve/abc123/status → "approved"
+  │     │     └── response includes: approver, timestamp, note
+  │     │
+  │     └── approval received ✓
+  │           approved by: kai@precisionplanit.com
+  │           note: "Verified changelog, good to ship"
+  │
+  └── push ✓ (3 registries, 12s)
+```
+
+The process sleeps and polls at a configurable interval until one of three outcomes:
+- **Approved** — pipeline continues. The approver's identity and optional note are logged.
+- **Denied** — pipeline aborts with a clear error. The denier's identity and note are logged.
+- **Timeout** — pipeline aborts. Default timeout is 30 minutes, configurable per-action and per-repo.
+
+In local CLI mode, `stagefreight approve` can also print the URL to stdout and wait. No `stagefreight serve` needed — the approval endpoint can be a temporary local HTTP server that shuts down after the decision.
+
+**Audit logging — who approved what:**
+
+Every approval decision is recorded as a structured audit event:
+
+```json
+{
+  "id": "approve-abc123",
+  "action": "docker-push",
+  "repo": "precisionplanit/stagefreight-oci",
+  "branch": "main",
+  "commit": "abc1234",
+  "requested_at": "2026-02-22T14:30:00Z",
+  "requested_by": "pipeline:gitlab-ci:12345",
+  "decision": "approved",
+  "decided_at": "2026-02-22T14:32:15Z",
+  "decided_by": {
+    "email": "kai@precisionplanit.com",
+    "provider": "oidc",
+    "issuer": "https://zitadel.precisionplanit.com"
+  },
+  "note": "Verified changelog, good to ship",
+  "expires_at": "2026-02-22T15:00:00Z",
+  "artifacts": [
+    "docker.io/prplanit/stagefreight:1.2.3",
+    "ghcr.io/sofmeright/stagefreight:1.2.3"
+  ]
+}
+```
+
+Audit events are stored locally (JSON lines file) and optionally forwarded to external systems (webhook, syslog, S3). The audit log is the compliance answer to "who authorized this production push at 2am?"
+
+**What actions require approval — configurable per-repo:**
+
+Approval gates are opt-in. By default, nothing requires approval (backward compatible). The manifest controls which actions are gated:
+
+```yaml
+approve:
+  # Notification channels for this repo (inherits daemon defaults if not set)
+  notify:
+    - type: smtp
+      to: kai@precisionplanit.com
+    - type: ntfy
+      topic: stagefreight-approvals
+
+  # Authentication config
+  auth:
+    provider: oidc
+    issuer: https://zitadel.precisionplanit.com
+    client_id: stagefreight
+    # Allowed approvers — email patterns or OIDC groups
+    allowed:
+      - kai@precisionplanit.com
+      - group:platform-team
+
+  # Which actions require approval
+  gates:
+    docker_push: true               # pushing images to registries
+    release_create: true            # creating releases
+    yolo_merge: true                # auto-merging MRs in yolo mode
+    branch_delete: false            # cleaning up branches (low risk, skip)
+
+  # Timing
+  timeout: 30m                      # how long to wait before aborting
+  poll_interval: 5s                 # how often to check for decisions
+  reminder: 15m                     # send a reminder if still pending after this
+
+  # Audit
+  audit:
+    store: local                    # local | s3 | webhook
+    # s3_bucket: my-audit-bucket
+    # webhook_url: https://audit.example.com/events
+```
+
+**Safe yolo mode — this is the key use case:**
+
+The approval system makes yolo mode safe for production. Instead of "auto-merge everything blindly," you get "auto-merge everything, but pause for a human check before the push hits production registries." The workflow becomes:
+
+1. Developer pushes to `main`.
+2. Pipeline runs: lint, build, test, scan — all automated, all fast.
+3. Pipeline reaches the push step. Approval gate fires.
+4. Developer gets a push notification on their phone. Taps the link. Sees the build passed, scans are clean, tags look right. Taps Approve.
+5. Push completes. Image is in the registry. Pipeline is green.
+
+Total human involvement: one tap on a phone. Total automation: everything except the final "yes." That's safe yolo mode — the automation does the work, the human provides the authorization.
+
+**Implementation priority — start with OIDC SSO:**
+
+The approval UI panel is the first piece of `stagefreight serve`'s web interface. It starts minimal:
+
+1. **Approval endpoint** — `/approve/{id}` serves the two-phase page (pre-auth landing → post-auth details).
+2. **OIDC login** — redirect to the configured OIDC provider, receive the ID token, extract identity.
+3. **Decision API** — `POST /api/approve/{id}/accept` and `POST /api/approve/{id}/deny` with optional note.
+4. **Poll API** — `GET /api/approve/{id}/status` for the waiting pipeline to poll.
+5. **Audit log** — write to a local JSON lines file.
+
+No dashboard, no admin panel, no settings UI. Just the approval flow. Everything else in `stagefreight serve` builds on top of this foundation later.
+
+**Web UI foundations — built into the approval page from day one:**
+
+The approval page is the first web surface StageFreight ships. Every UI pattern established here carries forward to the full `stagefreight serve` dashboard later. Get it right once, reuse everywhere.
+
+- **Language selector** — the approval page reads `Accept-Language` from the browser and renders in the user's preferred language by default. A language picker in the page header lets the user override. All UI strings come from the same docs module translation system that powers `--help` text and man pages — the approval page is just another render target. Setting `STAGEFREIGHT_LANG` or `LANG` in the environment works for CLI output; the web UI uses browser headers + user preference stored in a cookie.
+- **Light/dark mode** — respects `prefers-color-scheme` from the OS by default. A toggle in the page header lets the user override. Stored in a cookie, not a database — the approval page has no user settings table. CSS custom properties make this trivial: one set of variables, two value sets.
+- **Accessibility** — the approval page is the template for accessible UI across all of StageFreight's web surfaces:
+  - **Screen reader support** — semantic HTML, ARIA labels on all interactive elements, logical heading hierarchy, live regions for status updates (approval pending → approved). A blind user navigating the approval page with a screen reader gets the same information flow as a sighted user: org name → action summary → sign in → details → approve/deny.
+  - **Keyboard navigation** — full tab order through all interactive elements. Approve/Deny buttons are focusable and operable via Enter/Space. No mouse-only interactions.
+  - **Visual alternatives for audio/timing cues** — no audio-only signals. The polling status ("waiting for approval...") uses a visible spinner with text, not a sound. Timeout warnings are displayed as text with sufficient contrast, not flashing or color-only indicators.
+  - **High contrast** — color is never the sole differentiator. Approve (green) and Deny (red) buttons also have distinct text labels, icons, and ARIA descriptions. Works for colorblind users without a special mode.
+  - **Reduced motion** — respects `prefers-reduced-motion`. Spinners and transitions degrade gracefully to static indicators.
+
+These aren't afterthought checkboxes — they're structural decisions baked into the HTML/CSS/JS templates from the first commit. The approval page's templates become the foundation that every future `stagefreight serve` page inherits. Accessibility, i18n, and theming are free for every new page because they're in the base template, not bolted on per-page.
+
+**Dogfooding — StageFreight translates itself with its own system:**
+
+The approval page UI strings, the CLI `--help` text, the man pages, the README, the credits page — all of StageFreight's own user-facing text is managed through its own docs module + translation system. StageFreight is the first user of its own i18n pipeline:
+
+1. English strings live in `docs/modules/` as structured YAML.
+2. `stagefreight docs translate` runs LibreTranslate against them, producing `docs/translations/{lang}/` with per-item `source: auto` metadata and inline disclaimers.
+3. Contributors PR better translations for specific items. Those items flip to `source: human`, the contributor gets credited in the module metadata, the release notes, and the credits module.
+4. `go generate` bakes translations into the binary for `--help`. `docs render` produces translated man pages and docs. The web UI reads translations at runtime from the same module files.
+
+This means every user of StageFreight gets the same system for their own projects. The translation workflow, the per-item provenance tracking, the credits module, the LibreTranslate integration, the inline disclaimers — all of it works identically whether you're translating StageFreight's own approval page or your project's README. StageFreight proves the system works by using it on itself, and ships the proof as a feature.
+
+#### Structured Logging
+
+Every CLI tool starts with `fmt.Printf` and regrets it six months later when someone needs to parse pipeline output, correlate a build failure with a specific step, or figure out what happened at 3am from a daemon log. StageFreight uses structured logging from the start — not as a library choice, but as an architectural decision that affects every subcommand.
+
+**Two output modes, same log calls:**
+
+| Mode | When | Format | Example |
+|---|---|---|---|
+| **Human** | Terminal (TTY detected), or `--format text` | Colored, concise, aligned | `  lint ✓ (3 files, 0.2s)` |
+| **Machine** | Pipeline (no TTY), daemon mode, or `--format json` | JSON lines, one object per event | `{"level":"info","msg":"lint passed","files":3,"duration":"0.2s","cached":247}` |
+
+Auto-detection: if stdout is a TTY, human mode. If not (piped, CI runner, daemon), JSON mode. `--format json` or `--format text` overrides detection. `STAGEFREIGHT_LOG_FORMAT=json` env var works too.
+
+**Log levels:**
+
+| Level | What it means | Example |
+|---|---|---|
+| `error` | Something failed, the operation cannot continue | `build failed: Dockerfile syntax error at line 12` |
+| `warn` | Something unexpected but non-fatal, the operation continues | `cache miss for layer 3/7, rebuilding` |
+| `info` | Normal operation milestones — the default level | `lint passed`, `image pushed to docker.io/prplanit/app:1.2.3` |
+| `debug` | Internal details useful for troubleshooting | `resolved tag template "{version}" → "1.2.3"`, `buildx args: [--platform linux/amd64 ...]` |
+| `trace` | Extremely verbose, for development only | `HTTP POST https://registry/v2/... → 201 (43ms)` |
+
+Default level: `info`. Set via `--verbose` (enables `debug`), `--quiet` (only `error` + `warn`), or `STAGEFREIGHT_LOG_LEVEL=debug` env var. The daemon config has its own `log.level` field.
+
+**Context propagation — every log line knows where it came from:**
+
+Every log event carries structured context fields that identify the operation, not just the message:
+
+```json
+{
+  "level": "info",
+  "ts": "2026-02-22T14:32:15.123Z",
+  "msg": "image pushed",
+  "component": "build.image",
+  "step": "push",
+  "repo": "precisionplanit/stagefreight-oci",
+  "branch": "main",
+  "commit": "abc1234",
+  "registry": "docker.io",
+  "tag": "1.2.3",
+  "duration": "4.1s",
+  "request_id": "req-7f3a2b"
+}
+```
+
+Context fields are inherited through the call chain. The build engine sets `component: "build.image"` once, and every log call within that engine includes it automatically. The daemon adds `request_id` for correlating logs across a multi-step job. The CLI adds `repo` and `branch` from detection. No manual threading of context — the logger carries it.
+
+**Manifest and env config:**
+
+```yaml
+log:
+  level: info                     # error | warn | info | debug | trace
+  format: auto                    # auto | json | text
+```
+
+```bash
+# Environment overrides (useful in CI)
+STAGEFREIGHT_LOG_LEVEL=debug      # override log level
+STAGEFREIGHT_LOG_FORMAT=json      # override format
+```
+
+**Why this matters for the approval system and daemon:**
+
+The approval system logs structured audit events (who approved what, when). The daemon logs structured operational events (scan started, MR created, mirror pushed). Both need correlation IDs, timestamps, and context fields that machines can parse. Starting with structured logging means the audit log, the daemon log, and the CLI output all use the same format — a `jq` query that works on one works on all three.
+
 #### Pipeline-First Philosophy
 
 StageFreight works in two modes: **binary tool** (developer runs `stagefreight` on their laptop) and **pipeline** (CI/CD runs `stagefreight` in a controlled environment). Both execute the same manifest. Both produce the same output. But the pipeline is the golden path — and the experience should be so smooth that developers naturally prefer pushing a commit over building locally.
@@ -819,6 +1668,95 @@ A developer pushes, gets coffee, comes back to a green pipeline with a tested, s
 
 The pipeline should feel like an extension of the developer's editor — push, and the rest happens. Local dev is the escape hatch for when you need hands-on iteration. The pipeline is where real builds happen.
 
+**Manifest-driven pipelines — the manifest IS the config, not CLI flags:**
+
+The whole point of `.stagefreight.yml` is that CI pipelines shouldn't need CLI flags. The manifest declares what the project needs — platforms, registries, tags, lint rules, test definitions, approval gates. CI jobs call bare subcommands. Environment variables provide the few things that differ between environments (secrets, runner-specific paths). Nothing else.
+
+```yaml
+# .gitlab-ci.yml — the entire pipeline
+include: stagefreight
+
+# That's it. The component reads .stagefreight.yml and generates stages.
+# But if you want explicit control, the manual version is still trivial:
+
+variables:
+  # Global env — shared across all stages, safe for every phase to see
+  STAGEFREIGHT_LOG_FORMAT: json
+  STAGEFREIGHT_LOG_LEVEL: info
+
+lint:
+  stage: lint
+  script: stagefreight lint
+  # No --level, no --modules, no --exclude. The manifest has all of that.
+
+build:
+  stage: build
+  variables:
+    # Per-stage env — only this job sees these
+    DOCKER_HOST: tcp://docker:2375
+  script: stagefreight docker build
+  # No --platform, no --tag, no --registry, no --target.
+  # The manifest declares platforms, registries, tag templates.
+  # Git detection resolves the version. Done.
+
+test:
+  stage: test
+  script: stagefreight test
+  # No --context, no --tag, no --scope. The manifest defines test cases,
+  # scopes, and contexts. Delta detection skips unchanged tests.
+
+push:
+  stage: push
+  variables:
+    # Secrets scoped to the push stage only — not visible to lint/build/test
+    REGISTRY_TOKEN: $CI_REGISTRY_TOKEN
+  script: stagefreight docker push
+  # No --registry, no --tag. Same registries and tags from the manifest.
+  # Approval gates fire if configured. Credentials come from env.
+```
+
+**The layering model — how config resolves:**
+
+```
+Priority (highest wins):
+  1. CLI flags           (--platform linux/arm64)     ← developer override
+  2. Environment vars    (STAGEFREIGHT_PLATFORMS)      ← CI per-stage injection
+  3. Manifest            (.stagefreight.yml)           ← project config (source of truth)
+  4. Detection           (Dockerfile, go.mod, git)     ← inferred defaults
+  5. Built-in defaults   (platform: linux/$GOARCH)     ← sensible fallback
+```
+
+In practice: the manifest handles layers 3-5, which covers 95% of cases. CI sets env vars for secrets and runner-specific config (layer 2). Developers use CLI flags for one-off local overrides (layer 1). Nobody types `--platform linux/amd64,linux/arm64 --tag "{version}" --tag latest --registry docker.io/prplanit/myapp --registry ghcr.io/sofmeright/myapp` in a CI script — that's what the manifest is for.
+
+**Environment variable conventions:**
+
+Every manifest field has a corresponding `STAGEFREIGHT_*` env var. The mapping is mechanical:
+
+| Manifest field | Env var | Example |
+|---|---|---|
+| `docker.platforms` | `STAGEFREIGHT_PLATFORMS` | `linux/amd64,linux/arm64` |
+| `log.level` | `STAGEFREIGHT_LOG_LEVEL` | `debug` |
+| `log.format` | `STAGEFREIGHT_LOG_FORMAT` | `json` |
+| `approve.timeout` | `STAGEFREIGHT_APPROVE_TIMEOUT` | `15m` |
+| `lint.level` | `STAGEFREIGHT_LINT_LEVEL` | `full` |
+
+Nested fields use underscores: `docker.registries[0].url` → not mapped (use the manifest for complex structures). Env vars are for scalar overrides — simple values that CI needs to inject per-stage. Complex config (registry lists, test definitions, approval gates) lives in the manifest where it belongs.
+
+**What CI actually needs to provide via env:**
+
+Secrets and runner-specific paths — that's it. Everything else comes from the manifest:
+
+| What | Where | Why not in the manifest |
+|---|---|---|
+| Registry credentials | `REGISTRY_TOKEN`, `DOCKER_CONFIG` | Secrets don't belong in git |
+| Docker daemon socket | `DOCKER_HOST` | Runner-specific |
+| Cache paths | `STAGEFREIGHT_CACHE_DIR` | Runner filesystem layout |
+| OIDC tokens (approval) | `STAGEFREIGHT_OIDC_CLIENT_SECRET` | Secret |
+| Signing keys | `COSIGN_KEY`, `COSIGN_PASSWORD` | Secret |
+| Log level override | `STAGEFREIGHT_LOG_LEVEL` | Convenience, not config |
+
+CI stages inherit global env and add stage-specific env. StageFreight reads the manifest once, merges env overrides, and runs. The CI YAML never mentions platforms, tags, registries, lint rules, or test definitions — those are the project's concern, declared in the manifest, versioned in git alongside the code.
+
 **Deliverables:**
 - Go module with subcommand structure (cobra or similar)
 - Binary embedded in OCI image alongside existing tools
@@ -851,9 +1789,9 @@ type Provider interface {
 - CLI auto-detects provider from git remote or `--provider` flag
 - GitHub Actions wrapper (equivalent of the GitLab CI component)
 
-### Phase 2 — Cross-Provider Sync
+### Phase 2 — Cross-Provider Sync & Documentation Engine
 
-New subcommands for keeping repo metadata consistent across providers and registries.
+New subcommands for keeping repo metadata consistent across providers and registries, plus a full documentation-as-data engine.
 
 | Subcommand | Description |
 |---|---|
@@ -861,8 +1799,518 @@ New subcommands for keeping repo metadata consistent across providers and regist
 | `stagefreight sync metadata` | Mirror description, topics, homepage URLs across providers |
 | `stagefreight lint links` | Crawl README/docs for broken links, report or auto-fix |
 | `stagefreight flair` | Auto-manage shields.io badges in README |
+| `stagefreight docs render` | Render documentation modules into markdown files (see below) |
+| `stagefreight docs translate` | Generate best-effort translations of documentation modules |
 
-Nothing good exists for cross-provider doc sync today. DockerHub readme sync has a few janky GitHub Actions but nothing unified. This is greenfield.
+Nothing good exists for cross-provider doc sync today. DockerHub readme sync has a few janky GitHub Actions but nothing unified. This is greenfield. The documentation engine is entirely novel — nobody treats repo docs as structured, reusable, translatable data.
+
+#### `stagefreight docs` — Documentation Engine
+
+Documentation in most repos is write-once, forget-forever markdown. Badges go stale. Examples drift from reality. The same explanation is copy-pasted across five files and three of them are outdated. Translations don't exist or were done once and never updated.
+
+StageFreight treats documentation as **structured content**, not files you type into by hand. You maintain documentation as atomic, reusable modules in source files. StageFreight renders those modules into markdown wherever they're referenced — across multiple files, in multiple languages, updated every CI run.
+
+**The model: documentation modules as data.**
+
+Instead of writing markdown directly, you define documentation content in structured source files under a `docs/` directory (or wherever you want). Think of these like Kubernetes resource manifests — each file has a specific purpose and contains structured content that gets rendered into output.
+
+```
+docs/
+  modules/
+    badges.yml              # badge definitions (release, CI, social, compliance)
+    installation.yml        # installation instructions (by platform, by method)
+    configuration.yml       # config reference (env vars, CLI flags, file options)
+    api-endpoints.yml       # API reference (routes, params, responses)
+    faq.yml                 # FAQ entries
+    examples.yml            # code examples (reused across README, docs, comments)
+    changelog-entry.yml     # structured changelog data
+    commands/               # CLI command documentation (→ --help, man pages, docs)
+      root.yml              # stagefreight (top-level)
+      lint.yml              # stagefreight lint
+      docker-build.yml      # stagefreight docker build
+      build.yml             # stagefreight build
+      version.yml           # stagefreight version
+      ...                   # one per command/subcommand
+  translations/
+    es/                     # Spanish translations of modules
+      installation.yml
+      faq.yml
+      commands/             # translated CLI help text
+        docker-build.yml
+    fr/                     # French
+      installation.yml
+      commands/
+        docker-build.yml
+  templates/
+    README.md.tpl           # template for root README
+    docs/INSTALL.md.tpl     # template for install guide
+    docs/API.md.tpl         # template for API reference
+    man/                    # man page templates (troff format)
+      stagefreight.1.tpl
+      stagefreight-docker-build.1.tpl
+      stagefreight-lint.1.tpl
+      ...                   # one per command
+```
+
+**Module file format:**
+
+```yaml
+# docs/modules/badges.yml
+kind: badges
+entries:
+  releases:
+    - label: Release Version
+      shield: github/v/release/{repo}
+      link: "{repo_url}/releases/latest"
+    - label: Artifact Hub
+      shield: endpoint
+      url: https://artifacthub.io/badge/repository/{name}
+      link: "https://artifacthub.io/packages/helm/{org}/{name}"
+    - label: SLSA 3
+      image: https://slsa.dev/images/gh-badge-level3.svg
+      link: https://slsa.dev
+
+  code:
+    - label: Integration tests
+      shield: github/actions/workflow/status/{repo}/ci.yml?branch=main
+      link: "{repo_url}/actions?query=workflow%3ACI"
+    - label: codecov
+      shield: codecov/c/gh/{repo}/main
+      link: "https://codecov.io/gh/{repo}"
+    - label: OpenSSF Scorecard
+      shield: ossf-scorecard/{repo}
+      link: "https://scorecard.dev/viewer/?uri=github.com/{repo}"
+
+  social:
+    - label: Slack
+      shield: badge/slack-{name}-brightgreen.svg?logo=slack
+      link: "{slack_invite_url}"
+    - label: Bluesky
+      shield: badge/Bluesky-{name}-blue.svg?style=social&logo=bluesky
+      link: "https://bsky.app/profile/{bluesky_handle}"
+```
+
+```yaml
+# docs/modules/installation.yml
+kind: content
+id: installation
+title: Installation
+sections:
+  - id: docker
+    title: Docker
+    body: |
+      ```bash
+      docker pull {image}:{version}
+      docker run -d -p 8080:8080 {image}:{version}
+      ```
+  - id: helm
+    title: Helm
+    body: |
+      ```bash
+      helm repo add {name} {helm_repo_url}
+      helm install {name} {name}/{chart_name}
+      ```
+  - id: binary
+    title: Binary
+    body: |
+      Download the latest release from the [releases page]({repo_url}/releases/latest).
+      ```bash
+      curl -L {repo_url}/releases/download/v{version}/{name}-$(uname -s)-$(uname -m) -o {name}
+      chmod +x {name}
+      sudo mv {name} /usr/local/bin/
+      ```
+```
+
+```yaml
+# docs/modules/examples.yml
+kind: content
+id: examples
+title: Examples
+sections:
+  - id: quickstart
+    title: Quick Start
+    body: |
+      ```yaml
+      # Minimal configuration
+      version: 1
+      docker:
+        registries:
+          - url: docker.io
+            path: myorg/myapp
+      ```
+    # This same block can be referenced in README.md, docs/GETTING_STARTED.md,
+    # and even injected as a comment in .stagefreight.yml itself
+```
+
+**Template files with marker blocks:**
+
+Templates reference modules by ID. StageFreight renders the module content between marker comments, preserving everything outside the markers.
+
+```markdown
+<!-- file: README.md.tpl -->
+# My Project
+
+One-liner description from the manifest.
+
+<!-- stagefreight:module:badges group=releases -->
+<!-- /stagefreight:module:badges -->
+
+<!-- stagefreight:module:badges group=code -->
+<!-- /stagefreight:module:badges -->
+
+<!-- stagefreight:module:badges group=social -->
+<!-- /stagefreight:module:badges -->
+
+## Overview
+
+Hand-written content here. StageFreight never touches text outside markers.
+
+## Installation
+
+<!-- stagefreight:module:installation -->
+<!-- /stagefreight:module:installation -->
+
+## Quick Start
+
+<!-- stagefreight:module:examples section=quickstart -->
+<!-- /stagefreight:module:examples -->
+
+## Configuration
+
+<!-- stagefreight:module:configuration -->
+<!-- /stagefreight:module:configuration -->
+
+## FAQ
+
+<!-- stagefreight:module:faq -->
+<!-- /stagefreight:module:faq -->
+
+---
+<!-- stagefreight:translations -->
+<!-- /stagefreight:translations -->
+```
+
+Between markers, StageFreight owns the content. Outside markers, you own it. This means you can adopt incrementally — drop one marker pair into an existing README for badges, and the rest of the file stays untouched.
+
+**Variables:**
+
+Modules reference variables with `{variable}` syntax. Variables resolve from multiple sources in priority order:
+
+1. Module-level `vars:` overrides
+2. `docs.vars` in the manifest
+3. Auto-detected from the repo (repo URL, name, org, version, default branch, license, etc.)
+
+```yaml
+# in .stagefreight.yml
+docs:
+  vars:
+    slack_invite_url: https://myproject.slack.com/invite
+    bluesky_handle: myproject.bsky.social
+    helm_repo_url: https://charts.myproject.io
+    chart_name: myproject
+```
+
+**Multi-file rendering:**
+
+A single module can appear in multiple output files. Change the source module, every consumer updates on the next `stagefreight docs render` run (which runs in CI, delivered via MR or auto-merged if YOLO).
+
+```yaml
+# in .stagefreight.yml
+docs:
+  render:
+    - template: README.md.tpl
+      output: README.md
+    - template: docs/INSTALL.md.tpl
+      output: docs/INSTALL.md
+    - template: docs/API.md.tpl
+      output: docs/API.md
+```
+
+The quickstart example defined once in `examples.yml` can be referenced in `README.md`, `docs/GETTING_STARTED.md`, and `CONTRIBUTING.md`. Update it once, all three files update.
+
+**Translations:**
+
+```yaml
+docs:
+  translations:
+    languages: [es, fr, de, ja]
+    strategy: best-effort              # best-effort | manual-only
+    output: docs/i18n/{lang}/          # where translated files land
+```
+
+- `best-effort`: StageFreight generates initial translations using **LibreTranslate** (self-hosted, no external API dependency, no data leaves your infrastructure). LibreTranslate handles prose and UI strings; technical terms (command names, flags, code identifiers) are preserved verbatim via a configurable glossary. Translation provenance is tracked **per-item** — each translated string carries metadata about its origin:
+  - **Auto-translated items** render with an inline disclaimer **in the target language** appended to the end of the string — e.g. `"Construir imágenes de contenedor (*Traducido por IA*)"`, `"コンテナイメージをビルド (*AI翻訳*)"`. Small, inline, unambiguous — the reader knows which text is machine-generated.
+  - **Human-contributed items** simply lose the disclaimer in the UI — the rendered string is clean with no tag. The contributor's identity lives in the translation module metadata only (not in the rendered output), keeping the UI decluttered. Attribution is discoverable by looking at the source YAML or any doc page that embeds the `credits` module (see below).
+  - **Attribution flow** — when a contributor PRs a better translation for a specific item:
+    1. The item's module metadata records `source: human` and `contributor: "@maria"` (or name, handle, link — whatever the contributor provides).
+    2. The commit that lands the translation is auto-tagged for release notes — `stagefreight release notes` picks up translation contributions and credits contributors by name in the "Translations" section of the changelog.
+    3. The contributor appears in the project's `credits` module (see **Credits module** below) under the translators section, alongside dependency authors, maintainers, and anyone else the project wants to recognize.
+  - **Mixed pages are normal** — some items AI-translated, others human-provided. Each item stands on its own. A contributor who thinks one translation is poor can PR just that entry.
+  - When the source English module changes, affected items reset to `source: auto` and re-translate — the disclaimer reappears until a human re-reviews.
+
+  **Credits module — unified attribution for the entire project:**
+
+  The credits module (`docs/modules/credits.yml`) is a general-purpose attribution registry. It's not just for translators — it's the single place where a project acknowledges everyone and everything that contributed to it:
+
+  ```yaml
+  kind: credits
+  id: project-credits
+  sections:
+    - name: Maintainers
+      entries:
+        - name: SoFMeRight
+          link: https://github.com/sofmeright
+          role: Lead developer
+
+    - name: Translators
+      # Auto-populated from translation module metadata.
+      # Human-contributed translations automatically add entries here.
+      # Manual entries can be added too.
+      auto_from: translations    # pulls contributor info from all translation modules
+      entries:
+        - name: María García
+          link: https://github.com/maria
+          languages: [es]
+          items: 47               # auto-counted from translation modules
+
+    - name: Dependencies
+      # Auto-populated from go.mod / package.json / Cargo.toml.
+      # Each dependency's author/maintainer is resolved from the package registry.
+      auto_from: lockfiles
+      entries: []                 # auto-populated, or manually curated
+
+    - name: Special Thanks
+      entries:
+        - name: LibreTranslate
+          link: https://libretranslate.com
+          role: Machine translation engine
+  ```
+
+  The credits module renders wherever it's referenced — a `CREDITS.md` page, a footer section in the README, an "About" page in the web UI, or a `<!-- stagefreight:module:project-credits -->` marker anywhere. Projects configure what to show and where. `auto_from: translations` and `auto_from: lockfiles` mean the credits list stays current without manual maintenance — add a dependency or accept a translation PR, the credits update on the next render.
+
+  Translations are linked from the source page. A `<!-- stagefreight:translations -->` block in the English page renders as:
+  > Available in: [Español](docs/i18n/es/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [日本語](docs/i18n/ja/README.md)
+- `manual-only`: only renders translation links for languages that have manually-provided module translations in `docs/translations/{lang}/`. No auto-generation.
+- Translation modules mirror the English module structure. If `docs/translations/es/installation.yml` exists, it overrides `docs/modules/installation.yml` for Spanish output. Missing translations fall back to English with a notice.
+- Translations regenerate when the source module changes — the MR shows the English diff and flags the translations as potentially stale.
+
+**Microdocumentation — atomic content that weaves everywhere:**
+
+The real power is that modules are atomic. A single `section` from a module is the smallest addressable unit. You can reference it anywhere:
+
+- In a README badge block: `<!-- stagefreight:module:badges group=releases -->`
+- In a specific doc page: `<!-- stagefreight:module:installation section=docker -->`
+- As an inline code comment (experimental): StageFreight can inject a module section as a comment block in source files at a marked location
+- In a changelog: structured changelog entries from `changelog-entry.yml` render into `CHANGELOG.md`
+
+This means documentation is no longer copy-paste — it's defined once and woven into every place it's needed. A developer updates an installation step in `installation.yml`, and it propagates to the README, the install guide, and the contributor docs on the next CI run.
+
+**CLI Help Text, Man Pages, and Translations — from the same modules.**
+
+A CLI tool's help text is documentation. It appears in `--help` output, man pages, README usage sections, install guides, and tutorials. Today people copy-paste it across all of these and three of the five copies go stale after the next flag change. StageFreight solves this by making `--help` text and man pages just two more render targets from the same documentation modules — no new concepts, no new formats, no runtime overhead.
+
+**The `command` module kind:**
+
+Each CLI command gets a documentation module. The module defines the command's short description, long description, examples, and flag documentation — the same content that Cobra needs for `--help` and that man pages need for troff rendering.
+
+```yaml
+# docs/modules/commands/docker-build.yml
+kind: command
+id: docker-build
+use: "build"
+parent: docker
+short: "Build and push container images"
+long: |
+  Build container images using docker buildx.
+
+  Detects Dockerfiles, resolves tags from git, and pushes to configured
+  registries. Runs lint as a pre-build gate unless --skip-lint is set.
+
+  When no registries are configured, defaults to building for the current
+  platform and loading into the local Docker daemon.
+examples:
+  - description: "Build and load locally"
+    command: "stagefreight docker build --local"
+  - description: "Build for multiple platforms"
+    command: "stagefreight docker build --platform linux/amd64,linux/arm64"
+  - description: "Preview the build plan"
+    command: "stagefreight docker build --dry-run"
+  - description: "Build without pre-build lint"
+    command: "stagefreight docker build --skip-lint"
+flags:
+  - name: local
+    type: bool
+    default: "false"
+    description: "Build for current platform, load into daemon"
+  - name: platform
+    type: strings
+    description: "Override platforms (comma-separated)"
+  - name: tag
+    type: strings
+    description: "Override/add tags"
+  - name: target
+    type: string
+    description: "Override Dockerfile target stage"
+  - name: skip-lint
+    type: bool
+    default: "false"
+    description: "Skip pre-build lint"
+  - name: dry-run
+    type: bool
+    default: "false"
+    description: "Show the plan without executing"
+```
+
+This is the single source of truth. Every output — `--help`, man page, README, translated docs — reads from this one file.
+
+**Build-time codegen for `--help` text:**
+
+A small generator reads the command YAML modules and emits a Go source file with const strings that Cobra consumes. No runtime YAML parsing, no embedded files, no new dependencies — the help text is baked into the binary at compile time, same as ldflags for version.
+
+```
+docs/modules/commands/*.yml
+        │
+        │  go generate ./src/cli/cmd/...
+        ▼
+src/cli/cmd/help_gen.go          (generated, gitignored or committed — project's choice)
+        │
+        │  var dockerBuildShort = "Build and push container images"
+        │  var dockerBuildLong  = "Build container images using..."
+        │  var dockerBuildExample = "  # Build and load locally\n  stagefreight docker build --local\n..."
+        │
+        │  var helpStrings = map[string]map[string]CommandHelp{
+        │      "en": { "docker-build": { Short: dockerBuildShort, Long: dockerBuildLong, ... } },
+        │      "es": { "docker-build": { Short: "...", Long: "...", ... } },
+        │  }
+        ▼
+cobra commands reference the generated strings
+```
+
+The generator directive lives in one file:
+
+```go
+// src/cli/cmd/generate.go
+package cmd
+
+//go:generate go run ../../../tools/helpgen/main.go -modules ../../../docs/modules/commands -translations ../../../docs/translations -out help_gen.go
+```
+
+The generator (`tools/helpgen/main.go`) is a ~100 line Go program: read YAML, write Go const strings, group by locale. It's part of the StageFreight repo and runs as a standard `go generate` step.
+
+Each cobra command references the generated strings instead of inline literals:
+
+```go
+// Before (inline, drifts from docs):
+var dockerBuildCmd = &cobra.Command{
+    Use:   "build",
+    Short: "Build and push container images",
+    Long:  "Build container images using docker buildx...",
+}
+
+// After (generated from docs module):
+var dockerBuildCmd = &cobra.Command{
+    Use:     helpFor("docker-build").Use,
+    Short:   helpFor("docker-build").Short,
+    Long:    helpFor("docker-build").Long,
+    Example: helpFor("docker-build").Example,
+}
+```
+
+`helpFor()` is a one-line lookup into the generated map, selecting the locale from `$LANG`/`$LC_ALL` with fallback to English. The binary ships with all translations baked in — `LANG=es stagefreight docker build --help` shows Spanish help text with zero runtime overhead.
+
+**Man page generation:**
+
+Man pages are another render target. A template in `docs/templates/man/` references the same command modules:
+
+```
+docs/templates/man/stagefreight-docker-build.1.tpl
+```
+
+```troff
+.TH STAGEFREIGHT-DOCKER-BUILD 1 "{build_date}" "stagefreight {version}" "StageFreight Manual"
+.SH NAME
+stagefreight-docker-build \- <!-- stagefreight:command:docker-build field=short -->
+.SH SYNOPSIS
+.B stagefreight docker build
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+<!-- stagefreight:command:docker-build field=long -->
+.SH OPTIONS
+<!-- stagefreight:command:docker-build field=flags format=troff -->
+.SH EXAMPLES
+<!-- stagefreight:command:docker-build field=examples format=troff -->
+```
+
+`stagefreight docs render` produces the `.1` files from these templates. The same command module feeds the man page, the `--help` output, and the README — change the YAML, all three update.
+
+Man pages install via the standard mechanism: the Makefile (or `stagefreight build`) copies rendered `.1` files to `dist/man/man1/`. Package managers (`brew`, `deb`, `rpm`) pick them up from there. The Docker image includes them at `/usr/share/man/man1/`.
+
+**Translations — same system, no extra work:**
+
+Translated command modules live in the existing translation directory:
+
+```
+docs/translations/es/commands/docker-build.yml
+docs/translations/fr/commands/docker-build.yml
+```
+
+Each is a YAML file with the same structure as the English module — `short`, `long`, `examples`, `flags.description` — translated. The generator picks these up automatically and includes them in the generated Go source. Missing translations fall back to English.
+
+Translated man pages work the same way — `docs/translations/es/templates/man/` contains locale-specific `.tpl` files if someone provides them, otherwise the English template is used with translated module content injected.
+
+**The complete render pipeline:**
+
+```
+docs/modules/commands/*.yml                    (single source of truth)
+docs/translations/{lang}/commands/*.yml        (translated overrides)
+        │
+        ├── go generate           →  src/cli/cmd/help_gen.go    (--help text, all locales)
+        │
+        ├── stagefreight docs render
+        │   ├── README.md         →  <!-- stagefreight:command:docker-build field=short -->
+        │   ├── docs/CLI.md       →  full command reference
+        │   ├── man/stagefreight-docker-build.1  →  man page
+        │   ├── docs/i18n/es/CLI.md              →  translated reference
+        │   └── man/es/stagefreight-docker-build.1  →  translated man page
+        │
+        └── CI pre-build step     →  go generate runs before go build
+                                      docs render runs after build (or in MR)
+```
+
+One YAML file per command. Six output targets. Zero copy-paste. Add a flag, update the YAML, every consumer updates automatically. Translate the YAML, every locale updates. The developer never touches help strings in Go source, never hand-writes a man page, never manually syncs the README's command reference.
+
+**Manifest config:**
+
+```yaml
+docs:
+  modules_dir: docs/modules          # where module source files live
+  templates_dir: docs/templates      # where .tpl template files live (optional — can use markers in existing files)
+  render:
+    - template: README.md.tpl        # template input → output mapping
+      output: README.md
+    - template: docs/INSTALL.md.tpl
+      output: docs/INSTALL.md
+    # or: render markers in-place without a separate template file
+    - file: CONTRIBUTING.md           # existing file with markers, rendered in-place
+  vars:
+    project_name: My Project
+    slack_invite_url: https://...
+  translations:
+    languages: [es, fr]
+    strategy: best-effort
+    output: docs/i18n/{lang}/
+  readme_sync: [dockerhub, ghcr]     # push rendered README to registry descriptions
+  code_links: []                      # low priority — code-to-doc hyperlinking
+```
+
+**How it runs:**
+- `stagefreight docs render` — render all templates and in-place marker files, output to disk (markdown, man pages, Go help source)
+- `stagefreight docs render --check` — dry run, exit non-zero if output would change (CI gate)
+- `stagefreight docs render --target help` — render only the Go help source (used by `go generate`)
+- `stagefreight docs render --target man` — render only man pages
+- `stagefreight docs translate` — regenerate translations for changed modules
+- In pipeline: `go generate` runs before `go build` to bake help text into the binary; `docs render` runs after build for markdown and man pages, creates MR with doc changes (or auto-merges if YOLO)
+- In daemon mode: runs on schedule or when source modules change
 
 ### Phase 3 — Fork Maintenance
 
@@ -884,14 +2332,324 @@ Keeping a patched fork current with upstream while preserving your changes and s
 
 ### Phase 4 — Supply Chain & Security
 
-Extends the existing `security scan` subcommand with pre-build dependency auditing and SBOM tracking.
+Extends the existing `security scan` subcommand with pre-build dependency auditing, dependency provenance, and SBOM tracking.
 
 | Subcommand | Description |
 |---|---|
+| `stagefreight deps pull` | Fetch all dependencies fresh from source, build from source, run all enabled checks. Highest trust, slowest. The default when no deps mode is configured. |
+| `stagefreight deps verify` | Build from source once, produce a verified signature. On subsequent builds, trust downloads matching the signature — skip rebuilding. Falls back to full pull if signature doesn't match. |
+| `stagefreight deps cache` | Store verified/built deps in a content-addressed cache (local, restic, S3). Fastest — if a dep is cached and matches its verified signature, use it directly. |
+| `stagefreight docker verify` | Post-push and periodic cross-registry digest verification — confirms all endpoints serve what was built (see below) |
 | `stagefreight audit deps` | Pre-build dependency auditing — scan lockfiles for known-bad versions before building |
 | `stagefreight audit packages` | Cross-reference dependencies against known package-level attacks (typosquatting, maintainer takeovers) |
 | `stagefreight audit codebase` | Scan source files for invisible/malicious character sequences (see below) |
 | `stagefreight sbom diff` | Track SBOM changes between releases — what was added, removed, or changed |
+
+#### `stagefreight deps` — Dependency Provenance & Secure Sourcing
+
+Dependencies are the largest attack surface in modern software. Package registries serve pre-built binaries that you trust implicitly — you run `go mod download` or `npm install` and hope what you got matches what the source code would produce. StageFreight's `deps` subsystem makes that trust explicit, verifiable, and cached.
+
+**Core philosophy: all checks are always on.** Every dependency that passes through StageFreight gets the full treatment by default. Individual checks can be opted out of — but the default is maximum scrutiny. Developers should never have to remember to enable security checks. They should have to actively decide to disable one.
+
+**Three sourcing modes — how deps are obtained, not what checks run:**
+
+All three modes run the same checks. The modes control the trust/speed tradeoff for *where the bytes come from*:
+
+| Mode | Command | Trust Model | Speed | Storage |
+|---|---|---|---|---|
+| **Pull** | `deps pull` | Zero trust. Always fetch fresh from upstream, always build from source, always run every check. Nothing is reused. | Slowest | None — artifacts are ephemeral |
+| **Verify** | `deps verify` | Trust-but-verify. First run builds from source and records a verified signature (content hash of the built artifact). Subsequent runs download from upstream and compare against the signature — if it matches, skip the rebuild. If it doesn't match, fall back to full pull and alert. | Medium | Signatures only (~KB per dep) |
+| **Cache** | `deps cache` | Verified + stored. Same as verify, but built artifacts are stored in a content-addressed cache (local dir, restic repo, or S3 bucket). If a dep is in cache and its signature is valid, use it directly — no download, no build. | Fastest | Full artifacts (deduped, encrypted if restic/S3) |
+
+**Checks (always on, individually opt-out):**
+
+Every dependency — whether pulled fresh, verified, or cached — passes through these checks. Each check can be disabled per-project in the manifest. Checks run as part of the dependency resolution phase, before the project build starts.
+
+| Check | Default | What it does |
+|---|---|---|
+| **License compliance** | on | Scans dependency licenses against project policy. Flags GPL in MIT projects, AGPL in proprietary, unknown licenses. Configurable policy levels: `permissive`, `copyleft-ok`, `strict`. |
+| **Maintainer history** | on | Tracks maintainer changes between versions. Flags ownership transfers, new maintainers on dormant packages, rapid succession of maintainers (takeover pattern). |
+| **Typosquatting** | on | Compares dependency names against known-good packages using edit distance, phonetic similarity, and registry-specific heuristics. Flags `lodasg` → `lodash`, `requets` → `requests`. |
+| **Known-bad versions** | on | Cross-references against CVE databases, GitHub advisories, and curated blocklists. Flags dependencies with known vulnerabilities, malicious versions, or yanked releases. |
+| **SBOM diff** | on | Compares the current dependency tree against the last known-good state. Flags added, removed, or changed dependencies with a clear diff. Surfaces transitive dependency changes that direct lockfile inspection misses. |
+| **Source reproducibility** | on | Builds the dependency from source and compares the output against the pre-built artifact from the registry. Detects when upstream ships something their source code doesn't produce — the canonical supply chain attack. |
+
+**Pre-build dependency scrubbing:**
+
+The `deps` subsystem runs as a pre-build phase, before `docker build` or `build` starts. It operates like this:
+
+1. **Scan** — walk the project tree for dependency manifests (`go.mod`, `package.json`, `Cargo.toml`, `requirements.txt`, `*.csproj`, etc.). Parse each to extract the full dependency tree including transitive deps.
+2. **Resolve** — for each dependency in the tree, resolve it through the configured mode (pull/verify/cache). This is recursive — if a dependency has its own dependencies, those go through the same pipeline. Yes, this means building deps-of-deps-of-deps. The cache mode is what makes this tractable at scale — build once, cache forever.
+3. **Check** — run all enabled checks against every resolved dependency. Checks run in parallel per-dependency. Failures are collected and reported together.
+4. **Scrub** — replace dependency references in the build context with aliases pointing to the verified/cached copies. The actual project build (Dockerfile, `go build`, `npm run build`, etc.) consumes dependencies from a controlled local mirror rather than fetching from public registries. The build process never touches the network for dependencies — everything was pre-resolved.
+5. **Build** — hand off to the build engine (`docker build` / `build`). The build environment sees only verified, checked, pre-resolved dependencies.
+
+If any check fails at step 3, the build does not start. The developer sees exactly which dependency, which check, and why:
+
+```
+$ stagefreight docker build
+  deps ✗ 2 issues
+    lodash@4.17.21  [source-reproducibility] registry binary does not match source build (sha256 mismatch)
+    event-stream@3.3.6  [known-bad] flagged: malicious flatmap-stream dependency (CVE-2018-16492)
+  build skipped — dependency check failed
+```
+
+When everything passes:
+
+```
+$ stagefreight docker build
+  deps ✓ (47 deps checked, 41 cached, 6 verified, 0 pulled, 1.2s)
+  lint ✓ (3 files changed, 247 cached, 0.2s)
+  build ✓ linux/amd64 (cached layers, 4.1s)
+  push ✓ docker.io/prplanit/myapp:1.2.3
+```
+
+**Recursive dependency building (the inception problem):**
+
+Real dependency trees are deep. A Go module might pull in 200 transitive dependencies. An npm project might pull in 2000. Building every one from source on every run is impractical — that's why the three modes exist as an escalation ladder:
+
+- **First run / CI release builds:** `pull` mode. Build everything from source. Slow but you establish the full verified baseline.
+- **Regular CI builds:** `verify` mode. Download from upstream, compare signatures. If upstream changed without a version bump (supply chain attack), you catch it. If signatures match, skip the build — just download and go.
+- **Local dev / frequent iteration:** `cache` mode. Everything pre-built and stored. Dependency resolution is effectively a cache lookup — milliseconds per dep.
+
+The cache is content-addressed: same source + same build config = same cache key. Deduplication happens automatically. A dep shared across 50 projects in your org is built once and cached once. The restic backend adds encryption and efficient remote storage (S3, B2, SFTP). The local backend is just a directory — point it at an NFS mount for shared team caches.
+
+**Manifest config:**
+
+```yaml
+deps:
+  # Sourcing mode (how deps are obtained)
+  # pull: always fresh from source (default)
+  # verify: trust signatures after initial build
+  # cache: store in content-addressed cache
+  mode: cache
+
+  # Cache backend (only used when mode: cache or to store verify signatures)
+  cache:
+    backend: local              # local | restic | s3
+    path: /home/user/.stagefreight/deps-cache  # local backend
+    # repository: s3://bucket/deps-cache       # restic/s3 backend
+    # password: ${DEPS_CACHE_PASSWORD}         # restic encryption password
+    deduplicate: true           # content-addressed dedup (default: true)
+
+  # Individual checks — all on by default, opt out as needed
+  checks:
+    license:
+      enabled: true
+      policy: permissive        # permissive | copyleft-ok | strict
+    maintainer_history:
+      enabled: true
+    typosquatting:
+      enabled: true
+    known_bad:
+      enabled: true
+    sbom_diff:
+      enabled: true
+    source_reproducibility:
+      enabled: true
+
+  # When to run deps checks
+  on_build: true                # run before every build (default: true)
+  on_release: true              # full pull + verify before release builds (default: true)
+
+  # Failure behavior
+  fail_on: critical             # critical | warning | info — threshold for blocking builds
+
+  # Allowlist for known-acceptable findings
+  allow:
+    - dep: "github.com/some/package"
+      check: license
+      reason: "Vendored with permission, see LICENSE-THIRD-PARTY"
+    - dep: "lodash@4.17.21"
+      check: source_reproducibility
+      reason: "Known minification difference, verified manually"
+```
+
+**Zero-config behavior:** Without a `deps:` section, StageFreight defaults to `mode: verify` with all checks enabled and a local cache at `.stagefreight/deps-cache/`. The first build is slow (builds everything from source to establish signatures). Subsequent builds are fast (download + signature compare). The developer gets full supply chain protection without writing a single line of config.
+
+**Integration with `audit deps` and `audit packages`:**
+
+The `stagefreight audit deps` and `stagefreight audit packages` commands run the check pipeline *without* building or caching — they're diagnostic/reporting tools. `stagefreight deps` is the runtime pipeline that actually resolves, checks, and supplies dependencies to the build. Think of `audit` as the doctor's checkup and `deps` as the immune system — one is on-demand diagnostics, the other is always running.
+
+**Build engine integration:**
+
+`stagefreight docker build` and `stagefreight build` run the deps pipeline automatically before the build starts (unless `deps.on_build: false`). The pipeline:
+1. Resolves all dependencies through the configured mode
+2. Runs all checks
+3. If checks pass, sets up a local mirror with verified deps
+4. Injects the mirror into the build context (for Docker builds, this means a pre-build stage that populates a cache mount; for artifact builds, it means environment variables pointing at the local mirror)
+5. Hands off to the build engine
+
+The result: every built artifact has a verified, checked dependency chain — from source to binary to container image. Full provenance, full traceability, zero trust in upstream pre-built artifacts.
+
+#### Image Attestation & Pull-Time Verification
+
+The deps pipeline verifies everything *before* the build. The build engine produces a known-good image. But what happens after? The image sits in registries. Registries get compromised. Tags get overwritten. Digests get swapped. Between the moment StageFreight pushes an image and the moment Kubernetes pulls it, the image is unattended — and that gap is where supply chain attacks land.
+
+StageFreight closes this gap by extending the verification chain from build time all the way to pull time. The model has three layers: **attest**, **distribute**, **enforce**.
+
+**Layer 1: Attest — record what was built and where it landed.**
+
+After every successful build+push, StageFreight produces an attestation record — a signed statement of fact:
+
+```
+Attestation:
+  image: docker.io/prplanit/myapp
+  digest: sha256:abc123...
+  tag: 1.2.3
+  source_commit: def456...
+  source_repo: gitlab.prplanit.com/precisionplanit/myapp
+  build_date: 2026-02-22T14:30:00Z
+  builder: stagefreight v1.3.0
+  deps_verified: true
+  lint_passed: true
+  registries_pushed:
+    - url: docker.io/prplanit/myapp:1.2.3
+      digest: sha256:abc123...
+      pushed_at: 2026-02-22T14:30:12Z
+    - url: ghcr.io/sofmeright/myapp:1.2.3
+      digest: sha256:abc123...
+      pushed_at: 2026-02-22T14:30:14Z
+    - url: registry.prplanit.com/tools/myapp:1.2.3
+      digest: sha256:abc123...
+      pushed_at: 2026-02-22T14:30:15Z
+  signature: <cosign/sigstore signature>
+```
+
+This attestation is:
+- **Signed** using cosign/Sigstore (keyless or key-based, configurable). The signature proves StageFreight produced this attestation — not an attacker who compromised a registry.
+- **Stored alongside the image** as an OCI artifact (using cosign `attest` — the attestation travels with the image across registries).
+- **Stored in a transparency log** (Rekor, or a self-hosted instance) for tamper-evident audit trails.
+
+The attestation includes the digest at every registry endpoint. This is the critical detail: StageFreight doesn't just record "I built sha256:abc123" — it records "I pushed sha256:abc123 to these three registries and verified the digest matched at each endpoint after the push." If a registry silently replaces the image later, the attestation is evidence of the divergence.
+
+**Layer 2: Distribute — cross-registry digest verification.**
+
+After pushing to all configured registries, StageFreight performs a post-push verification sweep:
+
+1. For each registry, pull the manifest by tag and compare the digest against what was just pushed.
+2. If any registry returns a different digest, alert immediately — something between push and verify changed the image.
+3. Record the verification result in the attestation.
+
+In daemon mode, this verification sweep runs on a schedule — not just at push time. The daemon periodically pulls manifests from all registries for all managed images and compares digests against the attestation. If a registry diverges from the attested digest, StageFreight alerts. This catches:
+- Registry compromise (image replaced with malicious version)
+- Tag mutation (someone re-pushed a different image to the same tag)
+- Registry corruption (bit rot, storage failures)
+- Mirror drift (pull-through cache serving stale or tampered content)
+
+```
+$ stagefreight docker verify myapp:1.2.3
+  docker.io/prplanit/myapp:1.2.3          ✓ sha256:abc123... matches attestation
+  ghcr.io/sofmeright/myapp:1.2.3          ✓ sha256:abc123... matches attestation
+  registry.prplanit.com/tools/myapp:1.2.3  ✗ sha256:fff999... DOES NOT MATCH (expected sha256:abc123...)
+
+  ALERT: registry.prplanit.com/tools/myapp:1.2.3 digest mismatch — image may have been tampered with
+```
+
+**Layer 3: Enforce — verify at pull time in Kubernetes.**
+
+The attestation is only useful if something checks it before running the image. Kubernetes admission controllers are the enforcement point — they intercept pod creation and can accept, reject, or mutate based on policy.
+
+StageFreight integrates with existing policy engines rather than reinventing one:
+
+| Policy Engine | Integration |
+|---|---|
+| **Sigstore policy-controller** | Verifies cosign signatures and attestations against a CIP (ClusterImagePolicy). StageFreight's attestations are standard Sigstore format — the policy-controller consumes them natively. |
+| **Kyverno** | `verifyImages` rules check cosign signatures and attestation predicates. StageFreight publishes attestations as in-toto predicates that Kyverno can match against (e.g., "require `deps_verified: true` and `lint_passed: true`"). |
+| **OPA Gatekeeper** | External data provider or OCI artifact verification via rego policies. StageFreight attestations serve as the data source. |
+| **Connaisseur** | Lightweight signature-only verification. Works with StageFreight's cosign signatures out of the box. |
+
+The enforcement flow:
+
+```
+Developer pushes code
+  → CI pipeline: stagefreight docker build
+    → deps verified ✓
+    → lint passed ✓
+    → image built, signed, attested
+    → pushed to 3 registries with verified digests
+    → attestation stored as OCI artifact + transparency log
+
+Kubernetes schedules a pod with that image
+  → Admission controller intercepts
+  → Pulls attestation from OCI artifact store
+  → Verifies cosign signature (proves StageFreight made this attestation)
+  → Checks attestation predicates:
+      - digest matches? ✓
+      - deps_verified: true? ✓
+      - lint_passed: true? ✓
+      - source_repo is in allowed list? ✓
+      - build_date within acceptable age? ✓
+  → Pod admitted
+
+If ANY check fails:
+  → Pod rejected with clear reason
+  → Alert fires (webhook, Slack, PagerDuty)
+  → StageFreight daemon picks up the rejection and logs it
+```
+
+**What this catches that nothing else does:**
+
+| Scenario | Without StageFreight | With StageFreight |
+|---|---|---|
+| Registry compromise (image swapped) | Pod runs malicious image. Nobody notices until damage is done. | Admission controller rejects — digest doesn't match attestation. Alert fires. |
+| Tag mutation (re-push to same tag) | Pod runs unexpected version. "It was working yesterday" debugging spiral. | Admission controller rejects — new digest has no attestation. Must go through build pipeline to get one. |
+| Pull-through cache poisoning | JCR/Artifactory proxy serves tampered image transparently. All nodes pull the bad image. | Daemon's periodic digest sweep catches the divergence. Admission controller rejects pods using unattested digests. |
+| Developer `docker push` to production tag | Bypasses CI entirely. Untested, unscanned image running in production. | No attestation exists for the manually pushed image. Admission controller blocks it. Only StageFreight-built images have valid attestations. |
+| Stale image running for months | Base image has 47 unpatched CVEs. Nobody rebuilds because the code hasn't changed. | Attestation includes `build_date`. Policy can enforce maximum image age. Daemon's scheduled rebuilds produce fresh attestations. |
+
+**`stagefreight init` generates the admission policy.** When `stagefreight init` detects a Kubernetes cluster context (or the manifest has `enforce:` config), it scaffolds the appropriate admission policy for the detected policy engine — a Kyverno `ClusterPolicy`, a Sigstore `ClusterImagePolicy`, or an OPA constraint. The policy is pre-configured to verify StageFreight attestations for the project's registries. Delivered via MR to the cluster's GitOps repo.
+
+**Manifest config:**
+
+```yaml
+docker:
+  attestation:
+    # Sign images and attestations with cosign
+    sign: true
+    # Signing method
+    method: keyless                   # keyless (Sigstore/Fulcio OIDC) | key (bring your own cosign key)
+    # key: ${COSIGN_KEY}             # only used when method: key
+
+    # Transparency log for tamper-evident audit trail
+    transparency_log: rekor           # rekor (public) | rekor-self (self-hosted) | none
+    # rekor_url: https://rekor.example.com  # only for rekor-self
+
+    # Post-push verification
+    verify_after_push: true           # pull manifests back and compare digests (default: true)
+
+    # Periodic digest verification (daemon mode)
+    verify_schedule: daily            # daily | weekly | cron expression
+    verify_on_alert: abort            # abort | alert | both — what to do on mismatch
+    #   abort: daemon marks the image as compromised, removes tag attestation (admission controller will block)
+    #   alert: send alert but take no action (manual investigation)
+    #   both: alert AND mark as compromised
+
+  # Kubernetes admission enforcement (generates policy resources)
+  enforce:
+    engine: kyverno                   # kyverno | sigstore-policy-controller | gatekeeper | connaisseur
+    # What the admission policy requires:
+    require:
+      - signed                        # image must have a valid cosign signature
+      - attested                      # image must have a StageFreight attestation
+      - deps_verified                 # attestation must confirm deps were verified
+      - lint_passed                   # attestation must confirm lint passed
+    # Optional constraints:
+    max_image_age: 30d                # reject images older than 30 days (forces rebuilds)
+    allowed_repos:                    # only allow images from these source repos
+      - gitlab.prplanit.com/precisionplanit/*
+      - github.com/sofmeright/*
+    allowed_registries:               # only allow pulls from these registries
+      - docker.io/prplanit/*
+      - ghcr.io/sofmeright/*
+      - registry.prplanit.com/tools/*
+```
+
+**Zero-config behavior:** Without an `attestation:` section, StageFreight records digests and registry endpoints in its build result but does not sign or store attestations. The verification data is available in the build log and can be promoted to full attestation later. Adding `attestation.sign: true` activates the full chain — sign, attest, store, verify.
+
+**Relationship to existing Planned Features:**
+
+The "Image provenance chain" entry in Planned Features → Container Image Lifecycle is subsumed by this. The attestation system *is* the provenance chain — but it goes further by making the chain enforceable at pull time, not just auditable after the fact.
 
 #### `stagefreight audit codebase` — Invisible Character & Injection Scanning
 
@@ -1174,7 +2932,7 @@ Features accepted for implementation, to be slotted into phases as the core arch
 |---|---|
 | **Base image staleness** | Scan Dockerfiles across the org for pinned-to-old or EOL base images. Open upgrade MRs. |
 | **Registry tag cleanup** | Enforce retention policies on container registries — delete tags older than N days, keep only the last N tags per branch. Registries balloon silently. |
-| **Image provenance chain** | Full traceability from source commit → build → registry tag. Strengthens the supply chain story. |
+| **Image provenance chain** | Full traceability from source commit → build → registry tag. **Subsumed by Phase 4's Image Attestation & Pull-Time Verification** — the attestation system provides the provenance chain plus enforceable verification at every pull. |
 | **Security patch rebuilds** | Monitor published images for base-layer CVEs. When a security patch lands upstream, automatically rebuild and republish affected releases from their known-good build assets or repeatable build configs. Covers old releases that maintainers forget to patch — if the original build is reproducible (Dockerfile + pinned deps), StageFreight rebuilds it with the patched base and pushes a point release. Driven by `docker.rebuild.on_base_update` in the build engine. |
 | **Continuous rebuild scheduling** | Daemon triggers rebuilds at configured intervals (`daily`, `weekly`, `monthly`, cron expression) to pick up base image patches without waiting for code changes. Frequency is per-repo via `docker.rebuild.schedule`. |
 
@@ -1204,6 +2962,8 @@ Ideas worth tracking but not yet committed to. May be promoted to Planned as the
 |---|---|
 | **Stale branch cleanup** | Branches merged but never deleted, branches with no activity for N months. Open MRs to delete or just clean in YOLO mode. |
 | **Internal dependency graph** | Map which of your repos depend on which of your other repos. Visualize the internal dependency web across heterogeneous language ecosystems. |
+| **Documentation platform export** | `stagefreight docs publish` — export the module tree to external documentation platforms (Wiki.js, Docusaurus, MkDocs, GitBook, ReadTheDocs, or standalone HTML5). The git repo stays the source of truth; platforms are rendered views. Outline templates (cli-tool, web-app, library, helm-chart, homelab, operator) define recommended section structures that map to platform-native navigation (sidebars, page trees, nav blocks). Platform adapters handle theming, i18n locale variants, and HTML5 presentation. Same content, same structure, different renderer — change a module in git, and your README, Wiki.js, and Docusaurus site all update in one pipeline run. |
+| **Code-to-docs hyperlinking** | Documentation modules can link to specific symbols in source code (`src/handlers/auth.go:NewAuthHandler`). StageFreight resolves the symbol to a line number, generates a permalink, and auto-updates when the symbol moves. Broken references (deleted symbols) get flagged in the MR. |
 
 ---
 
@@ -1215,6 +2975,7 @@ Ideas worth tracking but not yet committed to. May be promoted to Planned as the
 | Dependency updates | Renovate, Dependabot (standalone) | `audit deps` — pre-build auditing |
 | Security scanning | Snyk, Socket, Trivy (standalone) | `security scan` + `audit packages` |
 | Cross-provider doc sync | Nothing good exists | `sync readme` + `sync metadata` |
+| Documentation-as-data with reuse + i18n | **Nothing exists in-repo** (GitBook, Notion — external, drifts) | `docs render` — modules, templates, translations, microdocumentation |
 | Fork maintenance with patch preservation | **Nothing exists** | `fork sync` + `fork status` + `fork audit` |
 | Pre-build supply chain sleuthing | Socket.dev is closest | `audit deps` + `audit packages` |
 | DockerHub readme sync | A few janky Actions | `sync readme` |
@@ -1235,7 +2996,7 @@ Ideas worth tracking but not yet committed to. May be promoted to Planned as the
 
 ## Market Positioning
 
-**"The maintainer you wish you had."**
+**"Hello World's a Stage"**
 
 StageFreight does the tedious hygiene work that every repo needs but nobody wants to do. It replaces the patchwork of Renovate + Snyk + Trivy + manual badge maintenance + manual fork rebases with a single tool that understands your entire repo portfolio.
 

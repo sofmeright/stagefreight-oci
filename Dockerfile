@@ -1,11 +1,34 @@
-FROM alpine:3.22.1
+# ---- Go build stage ----
+FROM docker.io/library/golang:1.25-alpine AS builder
+
+RUN apk add --no-cache git
+
+WORKDIR /src
+COPY go.mod go.sum* ./
+RUN go mod download
+
+COPY src/ ./src/
+
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+RUN CGO_ENABLED=0 go build \
+      -ldflags "-s -w \
+        -X gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/version.Version=${VERSION} \
+        -X gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/version.Commit=${COMMIT} \
+        -X gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/version.BuildDate=${BUILD_DATE}" \
+      -o /out/stagefreight ./src/cli
+
+# ---- Runtime image ----
+FROM docker.io/library/alpine:3.22.1
 
 LABEL maintainer="SoFMeRight <sofmeright@gmail.com>" \
       org.opencontainers.image.title="StageFreight" \
       description="A general-purpose DevOps automation image built to accelerate CI/CD pipelines." \
       org.opencontainers.image.description="A general-purpose DevOps automation image built to accelerate CI/CD pipelines." \
       org.opencontainers.image.source="https://gitlab.prplanit.com/precisionplanit/stagefreight-oci.git" \
-      org.opencontainers.image.licenses="GPL-3.0"
+      org.opencontainers.image.licenses="AGPL-3.0-only"
 
 # Install dependencies & useful tools.
 RUN apk add --no-cache \
@@ -32,5 +55,8 @@ RUN mkdir -p ~/.docker/cli-plugins && \
     LATEST_BUILDX_VERSION=$(curl -s https://api.github.com/repos/docker/buildx/releases/latest | jq -r .tag_name) && \
     curl -Lo ~/.docker/cli-plugins/docker-buildx "https://github.com/docker/buildx/releases/download/${LATEST_BUILDX_VERSION}/buildx-${LATEST_BUILDX_VERSION}.linux-amd64" && \
     chmod +x ~/.docker/cli-plugins/docker-buildx
+
+# Copy the Go binary from builder stage.
+COPY --from=builder /out/stagefreight /usr/local/bin/stagefreight
 
 CMD ["/bin/sh"]
