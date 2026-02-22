@@ -5,9 +5,8 @@ RUN apk add --no-cache git
 
 WORKDIR /src
 COPY go.mod go.sum* ./
-RUN go mod download
-
 COPY src/ ./src/
+RUN go mod tidy
 
 ARG VERSION=dev
 ARG COMMIT=unknown
