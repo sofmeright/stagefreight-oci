@@ -249,6 +249,7 @@ Rewrite existing bash/Python logic as Go subcommands. No new features, just pari
 | `stagefreight build` | Raw CI scripts (apt-get, wget, etc.) | Artifact builds — multi-toolchain Dockerfile pipelines that output binaries, zips, packages instead of images (see below) |
 | `stagefreight lint` | Pre-commit hooks, manual checks | Cache-aware, delta-only code quality gate that runs before every build (see below) |
 | `stagefreight test` | Scattered CI test scripts, Makefile targets | Structured, delta-aware testing engine — scoped tests across source/binary/container contexts with declarative HTTP/gRPC/exec/schema primitives (see below) |
+| `stagefreight commit` | Freeform `git commit -m` | Interactive item-by-item commit flow — module-driven conventional prefixes, templated notes, composable line-by-line messages, repo-customizable commit types and language (see below) |
 | `stagefreight security scan` | Trivy bash wrapper | Trivy orchestration, SBOM generation, vendor-specific result upload |
 | `stagefreight approve` | Manual CI/CD gates, Slack "approve" buttons | Human-in-the-loop approval gates — OIDC SSO approval flow for dangerous operations with audit logging (see below) |
 | `stagefreight version stamp` | Manual find-and-replace across files | Unified metadata injection — version, description, license, URLs across all project files (see below) |
@@ -374,6 +375,447 @@ The developer tags, pushes, and walks away. Every file in the repo that referenc
 **Dev builds:** When there's no tag (feature branch, local dev), version stamp generates a dev version: `0.0.0-dev+abc1234` (or `{last_tag}-dev+{sha}` if a previous tag exists). This ensures `--version` output is always meaningful, even in development.
 
 **Build integration:** `stagefreight docker build` and `stagefreight build` automatically run `version stamp` before building. The version is injected into the build context so Dockerfiles and build scripts always have access to correct metadata. For Go, this means `-ldflags` are set automatically — no manual `go build -ldflags "-X main.version=..."` incantation.
+
+#### `stagefreight release` — Platform-Agnostic Release Lifecycle
+
+The release subsystem handles the entire release lifecycle: notes generation, release creation, asset attachment, badge updates, and cross-platform sync. Everything is platform-agnostic — the same commands work against GitLab, GitHub, and Gitea/Forgejo through the forge abstraction layer.
+
+**Subcommands:**
+
+| Command | Description |
+|---|---|
+| `stagefreight release notes` | Generate markdown release notes from conventional commits |
+| `stagefreight release create` | Create a release on the forge with notes, assets, and registry links |
+| `stagefreight release badge` | Generate and commit a release status badge SVG |
+
+**Release creation flow:**
+
+```
+$ git tag v1.3.0 && git push --tags
+  → CI pipeline starts
+  → stagefreight docker build       # builds + pushes image
+  → stagefreight security scan      # Trivy + SBOM generation
+  → stagefreight release create \
+      --asset .stagefreight/security/security-scan.json \
+      --asset .stagefreight/security/sbom.spdx.json \
+      --registry-links
+  → stagefreight release badge
+```
+
+The `release create` command:
+1. Detects the forge from the git remote URL (GitLab, GitHub, Gitea)
+2. Generates release notes from conventional commits (or reads from `--notes` file)
+3. Creates the release via the forge API
+4. Uploads scan artifacts (SARIF, SBOM) as release assets
+5. Adds vendor-aware registry image links (Docker Hub web URL, GHCR package URL, etc.)
+6. Syncs the release to all configured sync targets
+
+**Conditional sync — cross-platform release distribution:**
+
+Sync targets let you mirror releases across forges with fine-grained control over when and what gets synced. Use cases:
+
+- Mirror GitLab releases to GitHub for public visibility
+- Sync security scan artifacts to a compliance-focused forge
+- Push badges to a documentation repo
+
+```yaml
+release:
+  badge:
+    enabled: true
+    path: .badges/release.svg
+    branch: main
+
+  sync:
+    - name: github-mirror
+      provider: github
+      url: https://github.com
+      credentials: GITHUB_MIRROR       # → GITHUB_MIRROR_TOKEN env var
+      project_id: prplanit/stagefreight
+      branches: ["^main$"]             # only sync releases from main
+      tags: ["^v\\d+\\.\\d+\\.\\d+$"]  # only stable semver tags
+      sync_release: true               # create release on target
+      sync_assets: true                # upload scan artifacts
+      sync_badge: false                # don't push badge here
+
+    - name: internal-gitlab
+      provider: gitlab
+      url: https://gitlab.internal.com
+      credentials: INTERNAL_GL
+      project_id: "42"
+      branches: ["!^develop$"]         # sync everything except develop
+      tags: ["!^v.*-alpha"]            # exclude alpha tags
+      sync_release: true
+      sync_assets: true
+      sync_badge: true
+```
+
+**Sync conditions — standard pattern syntax:**
+
+All `branches`, `tags`, and `git_tags` fields across StageFreight use the same pattern syntax:
+
+| Pattern | Meaning |
+|---|---|
+| `"^main$"` | Regex match — only `main` |
+| `"^release/.*"` | Regex match — any `release/` branch |
+| `"!^develop$"` | Negated regex — everything except `develop` |
+| `"!^v.*-rc"` | Negated regex — exclude release candidates |
+| `"main"` | Literal/regex match — matches `main` |
+
+When multiple patterns are in a list, evaluation is:
+1. **Excludes first** — any `!` pattern that matches → rejected
+2. **Includes second** — if any include pattern matches → allowed
+3. **Exclude-only lists** — if the list contains only `!` patterns and none matched, value is allowed (everything not excluded passes)
+4. **Empty list** — no filter, always allowed
+
+| Field | Behavior |
+|---|---|
+| `branches: ["^main$", "^release/.*"]` | Only sync on main or release branches |
+| `branches: ["!^develop$", "!^wip/.*"]` | Sync on everything except develop and wip branches |
+| `tags: ["^v\\d+\\.\\d+\\.\\d+$"]` | Only sync on stable semver tags |
+| `tags: ["!^v.*-rc", "!^v.*-alpha"]` | Sync all tags except RC and alpha |
+| `sync_release` | Create/update the release on the target forge (default: true) |
+| `sync_assets` | Upload scan artifacts to the target release (default: true) |
+| `sync_badge` | Commit badge SVG to the target repo (default: false) |
+
+This same pattern syntax is used in:
+- **Registry config** — `branches` and `git_tags` filter when to push images
+- **Sync targets** — `branches` and `tags` filter when to sync releases
+- **Security detail rules** — `tag` and `branch` in `Condition` control detail level
+- **Future features** — notifications, approvals, test scopes will all use the same primitive
+
+**Vendor-aware registry links:**
+
+When `--registry-links` is enabled (default), `release create` adds clickable links to the release for each configured registry. The link URL is vendor-aware:
+
+| Provider | Link URL Pattern |
+|---|---|
+| Docker Hub | `https://hub.docker.com/r/{path}/tags?name={tag}` |
+| GHCR | `https://github.com/{owner}/pkgs/container/{repo}` |
+| Quay.io | `https://quay.io/repository/{path}?tag={tag}` |
+| GitLab Registry | `{url}/{path}/container_registry` |
+| JFrog Artifactory | `https://{url}/ui/repos/tree/General/{path}` |
+| Generic | Raw image reference (`{url}/{path}:{tag}`) |
+
+**Security summary in release notes — configurable detail level:**
+
+The security scan results can be embedded in release notes at varying detail levels, controlled via `--security-detail` or the config `security.release_detail`. The level can also be conditional — different branches or release types can have different verbosity.
+
+```
+$ stagefreight release notes --security-summary .stagefreight/security/ --security-detail detailed
+```
+
+| Detail Level | What's Shown | Use Case |
+|---|---|---|
+| `none` | Nothing — security section omitted entirely | Public releases where you don't want to advertise vuln counts |
+| `counts` | Severity count table only (Critical: 2, High: 5, etc.) | Standard releases — quick glance at the security posture |
+| `detailed` | Count table + per-vulnerability CVE ID and one-line description | Internal releases, compliance-focused projects |
+| `full` | Count table + CVE ID + description + affected package + fixed version | Security-focused repos, audit trail releases |
+
+**Config-driven conditional detail:**
+
+The `release_detail_rules` use separate `tag` and `branch` regex fields so there's no ambiguity about what's being matched. Each field is optional — if omitted, that dimension isn't tested. Both fields must match when both are present. Rules are evaluated top-down, first match wins.
+
+```yaml
+security:
+  enabled: true
+  sbom: true
+  fail_on_critical: true
+
+  # Default detail level when no rule matches
+  release_detail: counts
+
+  # Conditional rules — explicit tag/branch regex matching
+  release_detail_rules:
+    - tag: "^v\\d+\\.\\d+\\.\\d+$"     # stable semver tags (v1.2.3)
+      detail: detailed                   # production releases get CVE-level detail
+
+    - tag: "^v\\d+.*-rc"                # release candidates (v1.2.3-rc1)
+      detail: full                       # RC releases get the full vulnerability table
+
+    - branch: "^(main|master)$"         # main branch (non-tag builds)
+      detail: counts                     # just the summary table
+
+    - branch: "^(develop|feature/.*)"   # dev branches
+      detail: none                       # omit security section entirely
+
+    # Tag + branch combined: only match RC tags on release branches
+    - tag: "^v\\d+.*-rc"
+      branch: "^release/.*"
+      detail: full
+```
+
+**Matching logic:**
+- `tag` regex is tested against `CI_COMMIT_TAG` (or git tag). Only evaluated when a tag is present.
+- `branch` regex is tested against `CI_COMMIT_BRANCH` (or git branch).
+- If both `tag` and `branch` are specified, both must match (AND logic).
+- If only `tag` is specified, the rule only applies to tag-triggered pipelines.
+- If only `branch` is specified, the rule only applies to branch pipelines (no tag present).
+- First matching rule wins. If no rule matches, falls back to `release_detail` default.
+
+| Field | Matches Against | When Evaluated |
+|---|---|---|
+| `tag: "^v\\d+\\.\\d+\\.\\d+$"` | `CI_COMMIT_TAG` / git tag | Only when pipeline was tag-triggered |
+| `branch: "^main$"` | `CI_COMMIT_BRANCH` / git branch | Always (branch is always known) |
+| Both `tag` + `branch` | Tag AND branch must both match | Only when tag is present |
+
+CLI override always wins: `--security-detail full` bypasses all rules.
+
+**Example output at each level:**
+
+`counts`:
+```markdown
+### Security Scan
+
+| Severity | Count |
+|---|---|
+| **Critical** | **2** |
+| High | 5 |
+| Medium | 12 |
+
+Total: 19 vulnerabilities
+```
+
+`detailed`:
+```markdown
+### Security Scan
+
+| Severity | Count |
+|---|---|
+| **Critical** | **2** |
+| High | 5 |
+
+#### Critical Vulnerabilities
+- **CVE-2026-1234** — Remote code execution in libfoo < 2.1.0
+- **CVE-2026-5678** — SQL injection in database driver < 4.0.3
+
+#### High Vulnerabilities
+- **CVE-2026-2345** — Path traversal in archive extraction
+- **CVE-2026-3456** — Denial of service via malformed input
+- ... and 3 more (see full report in release assets)
+```
+
+`full`:
+```markdown
+### Security Scan
+
+| Severity | CVE | Package | Installed | Fixed | Description |
+|---|---|---|---|---|---|
+| **Critical** | CVE-2026-1234 | libfoo | 1.9.2 | 2.1.0 | Remote code execution via crafted input |
+| **Critical** | CVE-2026-5678 | db-driver | 3.8.1 | 4.0.3 | SQL injection in parameterized queries |
+| High | CVE-2026-2345 | archive-lib | 0.4.0 | 0.4.1 | Path traversal in tar extraction |
+| High | CVE-2026-3456 | http-parser | 1.2.3 | 1.2.4 | DoS via malformed Content-Length |
+```
+
+#### `stagefreight commit` — Interactive Item-by-Item Commit Flow
+
+`git commit -m "stuff"` is the enemy of useful history. Developers write whatever comes to mind — inconsistent prefixes, no context, no categorization. Then when it's time to generate release notes, mine the log for breaking changes, or audit who changed what and why, the history is useless. Conventional Commits exists as a spec but nothing enforces it — it's an honor system that fails the moment someone is tired, rushed, or new to the project.
+
+`stagefreight commit` replaces freeform commit messages with a guided, interactive flow. You select a commit type, compose structured notes line by line, and submit when done. The result is a machine-parseable, human-readable commit message that feeds directly into release notes, changelogs, and audit trails.
+
+**The flow:**
+
+```
+$ stagefreight commit
+
+  Staged: 3 files (src/build/buildx.go, src/build/engines/image.go, src/config/docker.go)
+
+  Select commit type:
+  ❯ fix        — Bug fix (patch version bump)
+    feat       — New feature (minor version bump)
+    refactor   — Code restructuring, no behavior change
+    chore      — Build, tooling, dependency updates
+    docs       — Documentation only
+    test       — Adding or updating tests
+    perf       — Performance improvement
+    style      — Formatting, whitespace, semicolons
+    ci         — CI/CD pipeline changes
+    BREAKING   — Breaking change (major version bump)
+
+  Scope (optional, tab-complete from changed paths): build
+  Short summary: add registry auth with per-registry credentials
+
+  Add detail lines (empty line to finish):
+  > Login() method on Buildx authenticates before push
+  > Credentials resolved from env var prefix set in .stagefreight.yml
+  > Provider auto-detection from well-known domains
+  >
+
+  Commit mode:
+  ❯ commit      — git commit directly
+    mr          — commit + open merge request
+    draft-mr    — commit + open draft merge request
+
+  ✓ lint passed (3 files, 0.1s)
+  ✓ committed: fix(build): add registry auth with per-registry credentials
+```
+
+The resulting commit message:
+
+```
+fix(build): add registry auth with per-registry credentials
+
+- Login() method on Buildx authenticates before push
+- Credentials resolved from env var prefix set in .stagefreight.yml
+- Provider auto-detection from well-known domains
+```
+
+**Commit modules — standardized types with enforced language:**
+
+Commit types are called **modules**. Each module defines:
+- A **prefix** (the conventional commit type: `fix`, `feat`, `refactor`, etc.)
+- A **description** shown in the selection menu
+- A **version impact** (patch, minor, major, none) for automatic version bumping
+- **Prompt templates** — what questions to ask, what format to enforce
+
+Built-in modules cover the standard Conventional Commits types. But the key design: **everything is overrideable per repo.**
+
+**Repo-level customization via `.stagefreight/commit.yml`:**
+
+```yaml
+# .stagefreight/commit.yml — override or extend commit modules per repo
+
+# Override built-in module language/description
+modules:
+  fix:
+    description: "Bug fix (triggers patch release)"
+    prompts:
+      summary: "What was broken?"
+      detail_hint: "What caused it and how was it fixed?"
+  feat:
+    description: "New feature (triggers minor release)"
+    prompts:
+      summary: "What does the feature do?"
+      detail_hint: "Implementation notes, design decisions"
+  BREAKING:
+    description: "Breaking change — requires migration (triggers major release)"
+    prompts:
+      summary: "What breaks?"
+      detail_hint: "Migration steps, what consumers need to change"
+
+  # Custom modules — repo-specific commit types
+  migration:
+    prefix: "migration"
+    description: "Database schema migration"
+    version_impact: patch
+    prompts:
+      summary: "What does the migration do?"
+      detail_hint: "Tables affected, rollback strategy"
+  security:
+    prefix: "security"
+    description: "Security fix or hardening"
+    version_impact: patch
+    prompts:
+      summary: "What vulnerability or exposure?"
+      detail_hint: "CVE reference, attack vector, mitigation"
+  hotfix:
+    prefix: "hotfix"
+    description: "Emergency production fix"
+    version_impact: patch
+    prompts:
+      summary: "What's on fire?"
+
+# Commit modes — what happens after composing the message
+modes:
+  commit:
+    enabled: true                    # always available
+    default: true                    # selected by default
+  mr:
+    enabled: true                    # commit + open MR
+    require_tests: true              # run tests before allowing MR mode
+    require_lint: true               # run lint before allowing MR mode (default: true)
+  draft-mr:
+    enabled: true                    # commit + open draft MR
+  force:
+    enabled: false                   # disabled by default, skip all gates
+    require_2fa: true                # when enabled, require 2FA confirmation
+
+# Gates — conditions checked before the commit is finalized
+gates:
+  lint: true                         # run lint before commit (default: true)
+  tests: false                       # run tests before commit (default: false)
+  2fa: false                         # require 2FA for all commits (default: false)
+
+# Scope auto-complete sources
+scope:
+  from_paths: true                   # suggest scopes from changed file paths (default)
+  fixed:                             # additional fixed scope values
+    - api
+    - db
+    - infra
+    - ui
+```
+
+**Commit gates — dynamically configurable per mode:**
+
+Each commit mode can independently require different gates:
+
+| Gate | What it does | Default |
+|---|---|---|
+| `lint` | Run `stagefreight lint` on staged files before commit | **on** for all modes |
+| `tests` | Run `stagefreight test --context source` before commit | **off** by default, can be required per mode |
+| `2fa` | Require second-factor confirmation (TOTP, hardware key, or `stagefreight approve` flow) | **off** by default, useful for `force` mode |
+
+Gates are checked in order. If any gate fails, the commit is blocked with a clear message about what failed and how to fix it. `force` mode exists as an escape hatch but can be locked behind `require_2fa: true` so it's deliberate, not accidental.
+
+**How this feeds into release notes:**
+
+Because every commit has a structured prefix and scope, `stagefreight release notes` can:
+- **Categorize** changes by type (Features, Bug Fixes, Breaking Changes, etc.)
+- **Sort** within categories by scope
+- **Link** commits to MRs, issues, or external references
+- **Highlight** breaking changes with migration instructions (from the detail lines)
+- **Filter** noise — `chore` and `style` commits can be excluded from user-facing notes while remaining in the full changelog
+- **Generate** accurate version bumps — if any commit since the last tag is `BREAKING`, bump major; if any is `feat`, bump minor; otherwise patch
+
+```
+## 1.3.0 — 2026-02-22
+
+### Breaking Changes
+- **build**: registry credentials now use explicit `credentials` field instead of URL-derived env vars
+  Migration: add `credentials: DOCKERHUB` to your `.stagefreight.yml` registry config
+
+### Features
+- **build**: add branch filtering for multi-registry push targets
+- **build**: auto-inject VERSION/COMMIT/BUILD_DATE build args from Dockerfile ARGs
+
+### Bug Fixes
+- **build**: fix registry auth running after build instead of before
+
+### Documentation
+- **test**: add database migration testing as built-in test type
+```
+
+This is generated automatically from the structured commit history — no manual release note writing, no parsing freeform messages with regex, no missed breaking changes.
+
+**Two modes: interactive and flags-only.**
+
+StageFreight auto-detects which mode to use. If a TTY is attached (developer terminal), it launches the guided flow. If no TTY (CI pipeline, script, cron), it requires all fields as flags and never pauses for input. You can also force either mode explicitly:
+
+```bash
+# Interactive (default when TTY detected, or forced with --interactive)
+stagefreight commit
+stagefreight commit --interactive
+
+# Flags-only (default when no TTY, or forced with --no-interactive)
+# All required fields as flags — zero prompts, zero pauses
+stagefreight commit --type fix --scope build --summary "fix auth ordering" \
+  --detail "Login() now runs before Build()" \
+  --mode commit
+
+# Multiple detail lines via repeated flags
+stagefreight commit --type feat --scope api --summary "add user endpoints" \
+  --detail "REST CRUD for /api/v1/users" \
+  --detail "JWT auth middleware on all routes" \
+  --mode mr
+
+# Pipe detail lines from stdin
+git diff --name-only | stagefreight commit --type chore --scope deps \
+  --summary "update dependencies" --detail-stdin --mode commit
+```
+
+In flags-only mode, missing required fields (`--type`, `--summary`) cause an immediate error with usage — never a hanging prompt. This makes `stagefreight commit` safe to call from CI pipelines, git hooks, automation scripts, and other non-interactive contexts.
+
+**`stagefreight commit --amend`** re-opens the interactive flow pre-populated with the previous commit's fields. Edit what you need, submit, and the commit is amended with the updated message. In flags-only mode, `--amend` replaces only the fields you pass — unspecified fields keep their existing values.
 
 #### `stagefreight lint` — Built-In Code Quality Gate
 
@@ -1134,9 +1576,10 @@ test:
 | `tcp` | container | TCP port probe with timeout. |
 | `grpc` | container | gRPC endpoint probing — reflection, service listing, method calls with assertions. |
 | `websocket` | container | WebSocket connection, message exchange, assertions. |
+| `migration` | container | Database migration testing — spins up a database, runs migrations, verifies schema and data integrity across upgrade paths. |
 | `command` | any | Escape hatch — run any command. Structured metadata (scope, timeout, expect) still applies. |
 
-Every built-in type understands its domain. `http` knows about status codes, headers, JSON path queries, and request chaining (use a token from step A in step B). `go-test` knows about Go package paths and test binary caching. `grpc` knows about reflection and protobuf. The developer describes *what* to verify, not *how* to shell out to curl and parse the output.
+Every built-in type understands its domain. `http` knows about status codes, headers, JSON path queries, and request chaining (use a token from step A in step B). `go-test` knows about Go package paths and test binary caching. `grpc` knows about reflection and protobuf. `migration` knows about database engines, migration tools, and schema state. The developer describes *what* to verify, not *how* to shell out to curl and parse the output.
 
 **Scope mechanics — how delta-aware test selection works:**
 
@@ -1298,6 +1741,169 @@ test:
 - Dockerfile with HEALTHCHECK → HTTP probe against exposed ports
 
 The conventional tests run without scoping (full run every time). Adding a `test:` section with explicit scopes is how you get delta-aware test selection.
+
+#### `migration` Test Type — Declarative Database Migration Testing
+
+Database migrations are the most common source of deployment failures and the hardest to test properly. A fresh `CREATE TABLE` works, but does `ALTER TABLE` preserve existing rows? Does a migration that adds a NOT NULL column with a default actually backfill a million rows without timing out? Does rolling back migration 47 leave the schema in a state that migration 46 expects? Today, teams either don't test migrations at all (pray on deploy), write fragile bash scripts that spin up databases in CI, or maintain a parallel test harness that drifts from the real migration path.
+
+StageFreight's `migration` test type makes this declarative. You describe the migration path and the expected outcome. StageFreight handles database lifecycle, migration execution, and state verification.
+
+**The problem:** A typical migration test requires:
+1. Spin up a fresh database (right engine, right version)
+2. Run migrations (which tool? what order? what flags?)
+3. Verify schema state (tables exist, columns correct, constraints in place)
+4. Optionally: seed data at an intermediate point, run remaining migrations, verify data survived
+5. Tear down
+
+This is 50-100 lines of bash per test scenario. Most teams don't bother. When they do, the test breaks when the migration tool changes or the CI environment drifts. StageFreight turns this into config.
+
+**Declarative migration test workflow:**
+
+```yaml
+test:
+  cases:
+    # Fresh schema — all migrations from zero
+    - name: db-migrations-fresh
+      context: container
+      type: migration
+      scope:
+        files: ["migrations/**", "sql/**"]
+      engine: postgres
+      image: docker.io/library/postgres:17
+      steps:
+        - action: migrate
+          source: migrations/
+        - action: query
+          sql: "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';"
+          expect:
+            rows_contain: [users, sessions, audit_log]
+
+    # Upgrade path — seed data at a midpoint, verify it survives later migrations
+    - name: db-migrations-upgrade
+      context: container
+      type: migration
+      scope:
+        files: ["migrations/**"]
+      engine: postgres
+      image: docker.io/library/postgres:17
+      steps:
+        - action: migrate
+          source: migrations/
+          up_to: "003"
+        - action: seed
+          sql: |
+            INSERT INTO users (id, name) VALUES (1, 'Test'), (2, 'Admin');
+        - action: migrate
+          source: migrations/
+          from: "004"
+        - action: query
+          sql: "SELECT id, name FROM users ORDER BY id;"
+          expect:
+            row_count: 2
+            rows:
+              - { id: 1, name: "Test" }
+              - { id: 2, name: "Admin" }
+
+    # Rollback safety — apply all, rollback one, verify clean state
+    - name: db-migrations-rollback
+      context: container
+      type: migration
+      scope:
+        files: ["migrations/**"]
+      engine: postgres
+      image: docker.io/library/postgres:17
+      steps:
+        - action: migrate
+          source: migrations/
+        - action: snapshot
+          name: full-schema
+        - action: rollback
+          source: migrations/
+          steps: 1
+        - action: migrate
+          source: migrations/
+        - action: diff
+          against: full-schema
+          expect:
+            identical: true
+
+    # MySQL/MariaDB — same patterns, different engine
+    - name: db-migrations-mysql
+      context: container
+      type: migration
+      scope:
+        files: ["migrations/**"]
+      engine: mysql
+      image: docker.io/library/mysql:8.4
+      env:
+        MYSQL_ROOT_PASSWORD: test
+        MYSQL_DATABASE: testdb
+      steps:
+        - action: migrate
+          source: migrations/
+        - action: query
+          sql: "SHOW TABLES;"
+          expect:
+            rows_contain: [users, sessions]
+```
+
+**Built-in actions:**
+
+| Action | What it does |
+|---|---|
+| `migrate` | Run migrations from `source` directory. Supports `up_to` (stop at migration N), `from` (start from migration N), `direction: down` for rollback. |
+| `seed` | Execute raw SQL against the database. Use for inserting test data at specific points in the migration sequence. |
+| `query` | Execute a SELECT query and assert on the results. Supports `row_count`, `rows_contain`, `rows` (exact match), and `columns`. |
+| `exec` | Execute arbitrary SQL (DDL/DML) without result assertions. For setup steps that aren't seeds (e.g., creating extensions). |
+| `rollback` | Roll back N migration steps. Requires the migration tool to support down migrations. |
+| `snapshot` | Capture the current schema state as a named snapshot. Used with `diff` to verify migrations are idempotent or reversible. |
+| `diff` | Compare current schema against a named snapshot. Asserts `identical: true` or reports structural differences (added/removed tables, columns, constraints). |
+
+**Migration tool auto-detection:**
+
+StageFreight inspects the project to determine which migration tool to use. No explicit `tool:` config needed unless you want to override.
+
+| Detected from | Tool | Command |
+|---|---|---|
+| `atlas.hcl` or `.atlas/` | Atlas | `atlas migrate apply` |
+| `dbmate.yml` or `db/migrations/` with `-- migrate:up` comments | dbmate | `dbmate up` |
+| Numbered `.sql` files (`001_*.up.sql`, `001_*.down.sql`) | golang-migrate | `migrate -path ... -database ... up` |
+| `goose_db_version` table pattern or `-- +goose Up` comments | goose | `goose up` |
+| `knexfile.js` or `knexfile.ts` | Knex | `knex migrate:latest` |
+| `prisma/schema.prisma` | Prisma | `prisma migrate deploy` |
+| `alembic.ini` or `alembic/` | Alembic | `alembic upgrade head` |
+| `manage.py` + `django` in requirements | Django | `python manage.py migrate` |
+| Plain numbered `.sql` files (fallback) | Raw SQL | Applied in lexicographic order via `psql`/`mysql` |
+
+**Database lifecycle:**
+
+StageFreight manages the database container automatically:
+
+1. **Start** — pulls the specified `image`, starts it with ephemeral storage, waits for readiness (port probe + connection test)
+2. **Connect** — generates a connection string from the engine type and passes it to the migration tool (or makes it available as `$DATABASE_URL`)
+3. **Execute** — runs the `steps` in order against the live database
+4. **Tear down** — stops and removes the container. On failure, optionally dumps the database state for debugging (`on_failure: dump`)
+
+Engine-specific readiness probes:
+- **postgres**: `pg_isready` + test connection
+- **mysql/mariadb**: `mysqladmin ping` + test connection
+- **sqlite**: file exists (no container needed — SQLite tests run directly on disk)
+
+**Supported engines:**
+
+| Engine | Images | Connection |
+|---|---|---|
+| `postgres` | `postgres:17`, `postgres:16`, `postgres:15`, etc. | `postgres://test:test@localhost:5432/testdb?sslmode=disable` |
+| `mysql` | `mysql:8.4`, `mysql:8.0`, `mariadb:11`, etc. | `mysql://root:test@localhost:3306/testdb` |
+| `sqlite` | (no container) | `sqlite3:///tmp/test.db` |
+
+**Why this matters:**
+
+- **Fresh install testing** — verify that running all migrations from zero produces a valid schema. Catches "works on my machine" where the dev database has manual tweaks.
+- **Upgrade path testing** — verify that existing data survives migrations. Catches `ALTER TABLE DROP COLUMN` that silently destroys user data.
+- **Rollback testing** — verify that down migrations actually undo what up migrations did. Catches irreversible migrations hiding behind a `down.sql` that doesn't actually work.
+- **Seed persistence** — verify that reference data, default configs, or admin accounts survive the full migration path. Catches migrations that truncate tables or reset sequences.
+- **Cross-version testing** — same test matrix, different database versions. Run migrations against Postgres 15, 16, and 17 to catch version-specific behavior.
 
 #### `stagefreight approve` — Human-in-the-Loop Approval Gates
 
@@ -2898,6 +3504,93 @@ Features accepted for implementation, to be slotted into phases as the core arch
 | **Golden file management** | Define template files (`.editorconfig`, `.gitattributes`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `LICENSE`) in a template repo or daemon config. StageFreight ensures all repos in the org stay in sync — opens MRs when drift is detected. |
 | **CI template drift** | When a shared CI template or reusable workflow is updated, detect which repos are still on the old version and open upgrade MRs. |
 | **`.gitignore` drift** | Detect repos missing standard ignores for their detected language/framework. Lint and fix via MR. |
+
+### Shared Codebase Inheritance — The Wireframe Model
+
+Most internal projects share 60-80% of their scaffolding: authentication, routing, error handling, health checks, config loading, logging, database migrations, CI pipelines, Dockerfile patterns, deployment manifests. Today you either copy-paste this across repos (drift immediately), maintain a generator/template repo (generates once, never updates), or build a monorepo (organizational overhead, coupling, access control nightmares).
+
+StageFreight introduces a different model: **a living wireframe repo that downstream projects fork and continuously inherit from.**
+
+**The idea:**
+
+1. You maintain a **wireframe repository** — a Go+React (or whatever stack) application skeleton with your org's standard patterns, UI look, shared components, auth integration, and infrastructure wiring. This is a real, runnable application — not a cookiecutter template.
+
+2. Projects **fork the wireframe** and add their domain-specific code on top. The fork relationship is explicit — StageFreight tracks it via `fork sync`.
+
+3. When the wireframe gets improvements (dependency updates, security patches, UI refresh, new shared components, CI pattern changes), `stagefreight fork sync` **automatically propagates those changes downstream** to every project that inherits from it — preserving each project's local modifications.
+
+4. The wireframe itself uses StageFreight for its own lifecycle — dogfooding the entire release, scan, badge, and sync pipeline. This means the most simplistic possible demonstration of the tool's value: one repo's improvements flow to N repos automatically.
+
+**What the wireframe contains:**
+
+```
+wireframe/
+  src/
+    backend/           # Go API server — auth, middleware, health, config
+    frontend/          # React app — shared components, theming, layout
+    migrations/        # Database migration framework (empty by default)
+  deploy/
+    kubernetes/        # Base Helm chart / kustomize for deployment
+    docker/            # Multi-stage Dockerfile with org standards
+  .stagefreight.yml    # Full manifest — lint, build, test, security, release
+  .stagefreight/
+    commit.yml         # Org-standard commit types and language
+```
+
+**What a downstream project adds:**
+
+```
+my-project/
+  src/
+    backend/handlers/  # Project-specific API routes
+    frontend/pages/    # Project-specific UI pages
+    migrations/001_*.sql  # Project schema
+  .stagefreight.yml    # Inherits wireframe config, overrides project-specific values
+```
+
+**How fork sync handles this:**
+
+StageFreight's `fork sync` already handles upstream tracking with local patch preservation. Applied to the wireframe model:
+
+- Wireframe pushes a React component update → fork sync opens MRs in all downstream projects with the change, rebased on top of their local modifications
+- Wireframe patches a security vulnerability in the shared auth middleware → every project gets the fix automatically
+- Wireframe updates the Dockerfile base image → all projects rebuild with the patched base
+- A downstream project has customized the navbar → fork sync preserves the customization when merging wireframe changes that touch other parts of the layout
+
+**The multitenancy angle:**
+
+The wireframe can be designed for multitenancy from the start — one codebase, per-tenant configuration, shared infrastructure. A new project (tenant) forks, sets its tenant config, and gets a fully functional application with org-standard auth, UI, CI, and deployment. The wireframe handles the shared majority; the fork handles the unique minority.
+
+**Config inheritance:**
+
+```yaml
+# wireframe/.stagefreight.yml
+inherit:
+  from: wireframe              # this IS the wireframe
+  expose:                      # what downstream projects can override
+    - docker.registries
+    - metadata.name
+    - metadata.description
+    - release.sync
+
+# downstream/.stagefreight.yml
+inherit:
+  from: https://gitlab.prplanit.com/precisionplanit/wireframe
+  pin: main                    # track main branch of wireframe
+  override:
+    metadata:
+      name: my-project
+      description: "My specific project"
+    docker:
+      registries:
+        - url: docker.io
+          path: prplanit/my-project
+          credentials: DOCKERHUB
+```
+
+**Why this matters:**
+
+The goal is to maintain shared functionality once, in one place, and have it flow to every project that needs it. The wireframe model makes the common case trivial (fork, configure, deploy) and the customization case explicit (local patches tracked and preserved through upstream updates). StageFreight is both the tool that enables this and the first project that demonstrates it — building itself with its own pipeline, inheriting patterns it enforces on others.
 
 ### License Management
 

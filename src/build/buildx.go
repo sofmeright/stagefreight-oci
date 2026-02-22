@@ -107,6 +107,97 @@ func (bx *Buildx) buildArgs(step BuildStep) []string {
 	return args
 }
 
+// Login authenticates to registries that have a credentials label configured.
+// The Credentials field on each RegistryTarget is a user-chosen env var prefix:
+//
+//	credentials: DOCKERHUB_PRPLANIT  →  DOCKERHUB_PRPLANIT_USER / DOCKERHUB_PRPLANIT_PASS
+//	credentials: GHCR_ORG            →  GHCR_ORG_USER / GHCR_ORG_PASS
+//
+// No credentials field → no login attempted (public or pre-authenticated).
+// If credentials are configured but the env vars are missing, Login returns an error.
+func (bx *Buildx) Login(ctx context.Context, registries []RegistryTarget) error {
+	for _, reg := range registries {
+		if reg.Credentials == "" {
+			if bx.Verbose {
+				fmt.Fprintf(bx.Stderr, "skip login: no credentials configured for %s\n", reg.URL)
+			}
+			continue
+		}
+
+		prefix := strings.ToUpper(reg.Credentials)
+		user := os.Getenv(prefix + "_USER")
+		pass := os.Getenv(prefix + "_PASS")
+
+		if user == "" || pass == "" {
+			return fmt.Errorf("registry %s: credentials %q configured but %s_USER and/or %s_PASS env vars not set",
+				reg.URL, reg.Credentials, prefix, prefix)
+		}
+
+		if bx.Verbose {
+			fmt.Fprintf(bx.Stderr, "exec: docker login -u %s --password-stdin %s\n", user, reg.URL)
+		}
+
+		cmd := exec.CommandContext(ctx, "docker", "login", "-u", user, "--password-stdin", reg.URL)
+		cmd.Stdin = strings.NewReader(pass)
+		cmd.Stdout = bx.Stderr
+		cmd.Stderr = bx.Stderr
+
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("docker login to %s: %w", reg.URL, err)
+		}
+	}
+	return nil
+}
+
+// DetectProvider determines the registry vendor from the URL.
+// Well-known domains are matched directly. For unknown domains, returns "generic"
+// (future: probe the registry API to identify the vendor).
+func DetectProvider(registryURL string) string {
+	host := strings.ToLower(registryURL)
+	// Strip scheme if present
+	if idx := strings.Index(host, "://"); idx >= 0 {
+		host = host[idx+3:]
+	}
+	// Strip path
+	if idx := strings.IndexByte(host, '/'); idx >= 0 {
+		host = host[:idx]
+	}
+
+	switch {
+	case host == "docker.io" || host == "registry-1.docker.io" || host == "index.docker.io":
+		return "dockerhub"
+	case host == "ghcr.io":
+		return "ghcr"
+	case host == "quay.io":
+		return "quay"
+	case strings.Contains(host, "gitlab"):
+		return "gitlab"
+	case strings.Contains(host, "jfrog") || strings.Contains(host, "artifactory") || strings.Contains(host, "jcr"):
+		return "jfrog"
+	case strings.Contains(host, "harbor"):
+		return "harbor"
+	default:
+		return "generic"
+	}
+}
+
+// Save exports a loaded image as a tarball for downstream scanning and attestation.
+// The image must be loaded into the daemon first (--load or docker load).
+func (bx *Buildx) Save(ctx context.Context, imageRef string, outputPath string) error {
+	if bx.Verbose {
+		fmt.Fprintf(bx.Stderr, "exec: docker save -o %s %s\n", outputPath, imageRef)
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", "save", "-o", outputPath, imageRef)
+	cmd.Stdout = bx.Stderr
+	cmd.Stderr = bx.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker save %s: %w", imageRef, err)
+	}
+	return nil
+}
+
 // EnsureBuilder checks that a buildx builder is available and creates one if needed.
 func (bx *Buildx) EnsureBuilder(ctx context.Context) error {
 	// Check if default builder exists

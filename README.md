@@ -1,95 +1,128 @@
 ![Latest Release](https://gitlab.prplanit.com/precisionplanit/stagefreight-oci/-/badges/release.svg) ![Latest Release Status](https://gitlab.prplanit.com/precisionplanit/stagefreight-oci/-/raw/main/assets/badge-release-status.svg) [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/T6T41IT163)
 
-# StageFreight (OCI)
+# StageFreight
 
-> A general-purpose DevOps automation image built to accelerate CI/CD pipelines.  
-> Optimized for use with the [StageFreight GitLab component](https://gitlab.prplanit.com/components/stagefreight), but designed to grow beyond GitLab-specific tooling.
+> A declarative CI/CD automation CLI that detects, builds, scans, and releases container images across forges and registries — from a single manifest.
 
 ---
 
 ## Overview
 
-**StageFreight (OCI)** is a Docker image designed to serve as a flexible, prebuilt environment for running infrastructure-as-code and DevOps automation pipelines — especially where fast runtime and broad tooling support are essential.
+**StageFreight** is a Go CLI and container image that replaces fragile shell-script CI pipelines with a single binary. Point it at a repository and it will:
 
-It is built with a **GitLab-first** mindset but with a clear path toward **platform independence** (e.g., GitHub Actions, Gitea CI, Forgejo, and other CI/CD platforms). While the image is currently used internally by the StageFreight GitLab component, it is being developed into a standalone DevOps utility image.
+1. **Detect** the project layout (Dockerfiles, languages, git metadata)
+2. **Plan** the build (resolve tags, platforms, registries, build args)
+3. **Lint** the changeset (secrets, conflicts, large files, encoding — cache-aware, delta-only)
+4. **Build** container images via `docker buildx` (multi-platform, multi-registry)
+5. **Scan** for vulnerabilities (Trivy integration, SBOM generation)
+6. **Release** across forges (GitLab, GitHub, Gitea) with notes, badges, and cross-platform sync
+
+All driven by a single `.stagefreight.yml` manifest. No platform-specific CI scripting required.
 
 ---
 
-> Notice: We are not even in "BETA", this is early stages. I am actually very new to CI/CD. And this project was heavily AI enhanced. StageFreight-OCI specifically, is very much so an *idea* at this point. We have strong ambitions, but this would take time.
-> This image is used in our GitLab component to enforce consistency in our release cycle and our first priority is to achieve desired features within the GitLab component. 
-> We hope you like GitLab, cause it may be a minute otherwise.
+## Quick Start
+
+```yaml
+# .stagefreight.yml
+version: 1
+
+docker:
+  platforms: [linux/amd64]
+  registries:
+    - url: docker.io
+      path: yourorg/yourapp
+      tags: ["{version}", "latest"]
+      branches: ["^main$"]
+      credentials: DOCKERHUB
+```
+
+```yaml
+# .gitlab-ci.yml
+build-image:
+  image: docker.io/prplanit/stagefreight:latest
+  services:
+    - docker:24.0.5-dind
+  script:
+    - stagefreight docker build
+  rules:
+    - if: '$CI_COMMIT_TAG'
+```
+
+```bash
+# or run locally
+docker run --rm -v "$(pwd)":/src -w /src \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  docker.io/prplanit/stagefreight:latest \
+  stagefreight docker build --local
+```
 
 ---
 
 ## Key Features
 
-- ✅ **Preinstalled DevOps toolchain**: Includes `bash`, `coreutils`, `curl`, `docker-cli`, `git`, `jq`, `python3`, `rsync`, `tree`, `yq`, and other essential utilities — ready out of the box.
-- ⚡ **Zero bootstrapping time**: Skip installing dependencies in your `before_script`; everything is already available.
-- 🧩 **Tailored for CI jobs**: Ideal for release workflows, documentation generation, templating, and file patching tasks.
-- 🔄 **Integrated with StageFreight GitLab component**: Used as the base image for jobs like release note generation, README injection, and badge updates.
-- 🔧 **Flexible beyond GitLab**: Designed to eventually support other CI platforms by encapsulating logic in portable scripts and tools.
-- 🐳 **Built as a foundation image**: Intended for both direct usage and extension into more specialized CI/CD containers.
-
-> ❗ **Note:** For Ansible-specific automation (playbook runs, inventory management, etc.), we recommend using our dedicated image:  
-> [`ansible-oci`](https://gitlab.prplanit.com/precisionplanit/ansible-oci)
+- **Declarative manifest** — one `.stagefreight.yml` drives everything, no shell scripts
+- **Auto-detection** — finds Dockerfiles, injects VERSION/COMMIT/BUILD_DATE build args from git
+- **Multi-registry push** — Docker Hub, GHCR, GitLab, Quay, Harbor, JFrog — with branch/tag filtering via regex patterns (`!` negation supported)
+- **Security scanning** — Trivy vulnerability scan with configurable detail levels (none/counts/detailed/full) per branch or tag pattern
+- **Cross-forge releases** — create releases on GitLab, sync to GitHub/Gitea mirrors with assets and badges
+- **Cache-aware linting** — 7 lint modules run in parallel, only on changed files
+- **Self-building** — StageFreight builds itself (this image is produced by `stagefreight docker build`)
 
 ---
 
-## Use Cases
+## CLI Commands
 
-| Use Case | Description |
-|----------|-------------|
-| 🔖 GitLab Release Management | Used by the StageFreight component to generate release notes, create releases, and update release metadata |
-| 📝 Markdown & README Automation | Injects dynamic tables and documentation into component READMEs |
-| 🧪 CI/CD Utility Image | Drop-in toolset for scripting, patching, and infrastructure validation |
-| 🔄 Badge Generation | Used to build and push dynamic SVG badges for component health & release status |
-| 🚀 Platform-Agnostic Extension | Future target is to ship core tools for release workflows across GitHub, Gitea, Forgejo, etc. |
- 
- ---
-
-## See Also
-- [Ansible (Gitlab Component)](https://gitlab.prplanit.com/components/ansible)
-- [Ansible OCI](https://gitlab.prplanit.com/precisionplanit/ansible-oci) – Docker runtime image for Ansible workflows
-- [StageFreight GitLab Component](https://gitlab.prplanit.com/components/stagefreight) – GitLab component that provides CI pipeline orchestration for releases
-
----
-
-## Image Scope
-
-### Included:
-
-- ✅ General DevOps tools (`bash`, `coreutils`, `curl`, `docker-cli (w/ buildx)`, `git`, `jq`, `python3`, `rsync`, `tree`, `yq`, etc.)
-- ✅ Markdown formatting and file manipulation utilities
-- ✅ Portable release automation scripts (e.g. changelog, badge generation)
-- ✅ Compatibility with the [StageFreight GitLab Component](https://gitlab.prplanit.com/components/stagefreight)
-
-### Excluded:
-
-- ❌ Ansible and related modules (see [ansible-oci](https://gitlab.prplanit.com/precisionplanit/ansible-oci))
-- ❌ CI platform dependencies (i.e., it does not install GitLab Runner, GitHub Actions CLI, etc.)
-
----
-
-## Example `.gitlab-ci.yml` Usage
-
-```yaml
-generate_release_notes:
-  image: registry.prplanit.com/tools/stagefreight:latest
-  script:
-    - ./scripts/gitlab/generate-release_notes.sh > release.md
+```
+stagefreight docker build    # detect → plan → lint → build → push
+stagefreight lint             # run lint modules on the working tree
+stagefreight security scan    # trivy scan + SBOM generation
+stagefreight release create   # create forge release with notes + sync
+stagefreight release notes    # generate release notes from git log
+stagefreight release badge    # generate/commit release status badge
+stagefreight version          # print version info
 ```
 
-## Roadmap & Vision
-- 🛠 Migrate all component-side tooling from GitLab CI jobs into this image (self-contained workflows)
-- 🌐 Provide scripts and CLIs that are CI/CD platform-agnostic
-- 🧰 Make it easy to use StageFreight’s features in GitHub Actions, Forgejo Pipelines, Drone CI, and more
-- 📦 Package the image for distribution via container registries (e.g., Docker Hub, GHCR)
+---
+
+## Image Contents
+
+Based on **Alpine 3.22** with a statically compiled Go binary:
+
+| Category | Tools |
+|----------|-------|
+| **CLI** | `stagefreight` (Go binary) |
+| **Container** | `docker-cli`, `docker-buildx` |
+| **Scripting** | `bash`, `python3`, `jq`, `yq` |
+| **Utilities** | `curl`, `git`, `rsync`, `tree`, `coreutils` |
+
+### Looking for a minimal image?
+
+If you need a pure DevOps toolchain image without the StageFreight CLI (just Ansible, scripts, etc.), use older tags or our dedicated Ansible image:
+
+| Image | Purpose |
+|-------|---------|
+| [`prplanit/stagefreight:0.1.1`](https://hub.docker.com/r/prplanit/stagefreight) | Last pre-CLI release — vanilla DevOps toolchain (bash, docker-cli, buildx, python3, yq, jq, etc.) |
+| [`prplanit/ansible-oci`](https://hub.docker.com/r/prplanit/ansible-oci) | Ansible-native image — Python 3.13 + Alpine 3.22, ansible-core, ansible-lint, sops, rage, pywinrm, kubernetes.core, community.docker, community.sops |
+
+Starting from **0.2.0**, `prplanit/stagefreight` includes the Go CLI binary and is purpose-built for `stagefreight docker build` workflows.
+
+---
+
+## See Also
+
+- [StageFreight GitLab Component](https://gitlab.prplanit.com/components/stagefreight) — GitLab CI component (Ansible-based, being superseded by the Go CLI)
+- [Ansible OCI](https://gitlab.prplanit.com/precisionplanit/ansible-oci) — Docker image for Ansible playbook execution
+- [Roadmap](docs/RoadMap.md) — full feature roadmap and manifest examples
+
+---
 
 ## Contributing
-- If you'd like to contribute tools, scripts, or improvements:
-- Fork the repository at StageFreight OCI
+
+- Fork the repository at [StageFreight OCI](https://gitlab.prplanit.com/precisionplanit/stagefreight-oci)
 - Submit Merge Requests
 - Open issues with ideas, bugs, or feature requests
 
 ## License
-- Distributed under the GNU-2.0 License.
+
+Distributed under the AGPL-3.0-only License.

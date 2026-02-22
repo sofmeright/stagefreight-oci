@@ -28,6 +28,7 @@ type BuildStep struct {
 	Registries []RegistryTarget // image mode only
 	Load       bool             // --load into daemon
 	Push       bool             // --push to registries
+	SavePath   string           // save image tarball here after build (for security scanning)
 }
 
 // ExtractRule defines a file to extract from a build container.
@@ -38,7 +39,9 @@ type ExtractRule struct {
 
 // RegistryTarget is a resolved registry push destination.
 type RegistryTarget struct {
-	URL  string
-	Path string
-	Tags []string
+	URL         string
+	Path        string
+	Tags        []string
+	Credentials string // env var prefix for auth (e.g., "DOCKERHUB" → DOCKERHUB_USER/DOCKERHUB_PASS)
+	Provider    string // registry vendor: dockerhub, ghcr, gitlab, jfrog, harbor, quay, generic
 }

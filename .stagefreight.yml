@@ -1,0 +1,10 @@
+version: 1
+
+docker:
+  platforms: [linux/amd64]
+  registries:
+    - url: docker.io
+      path: prplanit/stagefreight
+      tags: ["{version}", "latest"]
+      branches: [main]
+      credentials: DOCKERHUB

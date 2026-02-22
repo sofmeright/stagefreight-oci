@@ -12,8 +12,10 @@ const defaultConfigFile = ".stagefreight.yml"
 
 // Config is the top-level StageFreight configuration.
 type Config struct {
-	Lint   LintConfig   `yaml:"lint"`
-	Docker DockerConfig `yaml:"docker"`
+	Lint     LintConfig     `yaml:"lint"`
+	Docker   DockerConfig   `yaml:"docker"`
+	Security SecurityConfig `yaml:"security"`
+	Release  ReleaseConfig  `yaml:"release"`
 }
 
 // Load reads configuration from a YAML file.
@@ -41,7 +43,9 @@ func Load(path string) (*Config, error) {
 
 func defaults() *Config {
 	return &Config{
-		Lint:   DefaultLintConfig(),
-		Docker: DefaultDockerConfig(),
+		Lint:     DefaultLintConfig(),
+		Docker:   DefaultDockerConfig(),
+		Security: DefaultSecurityConfig(),
+		Release:  DefaultReleaseConfig(),
 	}
 }

@@ -24,8 +24,8 @@ FROM docker.io/library/alpine:3.22.1
 
 LABEL maintainer="SoFMeRight <sofmeright@gmail.com>" \
       org.opencontainers.image.title="StageFreight" \
-      description="A general-purpose DevOps automation image built to accelerate CI/CD pipelines." \
-      org.opencontainers.image.description="A general-purpose DevOps automation image built to accelerate CI/CD pipelines." \
+      description="Declarative CI/CD automation CLI — detect, build, scan, and release container images from a single manifest." \
+      org.opencontainers.image.description="Declarative CI/CD automation CLI — detect, build, scan, and release container images from a single manifest." \
       org.opencontainers.image.source="https://gitlab.prplanit.com/precisionplanit/stagefreight-oci.git" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 

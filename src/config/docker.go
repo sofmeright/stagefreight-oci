@@ -16,8 +16,25 @@ type RegistryConfig struct {
 	URL         string   `yaml:"url"`
 	Path        string   `yaml:"path"`
 	Tags        []string `yaml:"tags"`
-	Branches    []string `yaml:"branches"`
-	Credentials string   `yaml:"credentials"`
+	Credentials string   `yaml:"credentials"` // env var prefix for auth (e.g., "DOCKERHUB" → DOCKERHUB_USER/DOCKERHUB_PASS)
+	Provider    string   `yaml:"provider"`    // registry vendor: dockerhub, ghcr, gitlab, jfrog, harbor, quay, generic
+
+	// Branches controls which branches push to this registry.
+	// Uses standard pattern syntax: regex, literal, or !negated.
+	// Empty = always push. Examples:
+	//   ["^main$"]                    — only main
+	//   ["^main$", "^release/.*"]     — main or release branches
+	//   ["!^develop$"]                — everything except develop
+	//   ["^main$", "!^.*-wip$"]       — main, but not if it ends in -wip
+	Branches []string `yaml:"branches"`
+
+	// GitTags controls which git tags trigger a push to this registry.
+	// Uses standard pattern syntax: regex, literal, or !negated.
+	// Empty = all tags (no filter). Examples:
+	//   ["^v\\d+\\.\\d+\\.\\d+$"]     — stable semver only
+	//   ["!^v.*-rc"]                   — exclude release candidates
+	//   ["^v.*", "!^v.*-alpha"]        — all v-prefixed except alpha
+	GitTags []string `yaml:"git_tags"`
 }
 
 // CacheConfig holds build cache settings.
