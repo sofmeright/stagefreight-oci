@@ -7,7 +7,7 @@ spec:
     dind_image:
       description: "Docker-in-Docker service image"
       type: string
-      default: "docker.io/docker:24.0.5-dind"
+      default: "docker.io/docker:27-dind"
     stagefreight_args:
       description: "Additional arguments passed to stagefreight docker build"
       type: string

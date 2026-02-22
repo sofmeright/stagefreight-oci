@@ -7,7 +7,7 @@ build-image:
   stage: build
   image: docker.jcr.pcfae.com/prplanit/stagefreight:0.2.0-alpha.1
   services:
-    - name: docker.jcr.pcfae.com/docker:24.0.5-dind
+    - name: docker.jcr.pcfae.com/docker:27-dind
       alias: docker
   variables:
     DOCKER_HOST: "tcp://docker:2376"
