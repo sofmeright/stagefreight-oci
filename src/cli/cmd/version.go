@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/version"
+	"github.com/sofmeright/stagefreight/src/version"
 )
 
 var versionCmd = &cobra.Command{

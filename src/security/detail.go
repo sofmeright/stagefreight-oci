@@ -3,7 +3,7 @@ package security
 import (
 	"os"
 
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/config"
+	"github.com/sofmeright/stagefreight/src/config"
 )
 
 // ResolveDetailLevel evaluates the security detail rules against the current

@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/zricethezav/gitleaks/v8/detect"
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/lint"
+	"github.com/sofmeright/stagefreight/src/lint"
 )
 
 func init() {

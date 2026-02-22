@@ -10,7 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/config"
+	"github.com/sofmeright/stagefreight/src/config"
 )
 
 // Engine orchestrates lint modules across files.

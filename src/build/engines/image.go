@@ -7,8 +7,8 @@ import (
 	"runtime"
 	"time"
 
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/build"
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/config"
+	"github.com/sofmeright/stagefreight/src/build"
+	"github.com/sofmeright/stagefreight/src/config"
 )
 
 func init() {

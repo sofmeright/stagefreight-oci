@@ -6,10 +6,10 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/build"
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/config"
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/forge"
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/release"
+	"github.com/sofmeright/stagefreight/src/build"
+	"github.com/sofmeright/stagefreight/src/config"
+	"github.com/sofmeright/stagefreight/src/forge"
+	"github.com/sofmeright/stagefreight/src/release"
 )
 
 var (

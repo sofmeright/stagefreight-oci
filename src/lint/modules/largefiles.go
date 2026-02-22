@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/lint"
+	"github.com/sofmeright/stagefreight/src/lint"
 )
 
 const defaultLargeFileMax int64 = 500 * 1024 // 500 KB

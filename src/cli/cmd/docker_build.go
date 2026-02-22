@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/build"
-	_ "gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/build/engines"
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/lint"
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/lint/modules"
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/output"
+	"github.com/sofmeright/stagefreight/src/build"
+	_ "github.com/sofmeright/stagefreight/src/build/engines"
+	"github.com/sofmeright/stagefreight/src/lint"
+	"github.com/sofmeright/stagefreight/src/lint/modules"
+	"github.com/sofmeright/stagefreight/src/output"
 )
 
 var (

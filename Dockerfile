@@ -14,9 +14,9 @@ ARG BUILD_DATE=unknown
 
 RUN CGO_ENABLED=0 go build \
       -ldflags "-s -w \
-        -X gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/version.Version=${VERSION} \
-        -X gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/version.Commit=${COMMIT} \
-        -X gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/version.BuildDate=${BUILD_DATE}" \
+        -X github.com/sofmeright/stagefreight/src/version.Version=${VERSION} \
+        -X github.com/sofmeright/stagefreight/src/version.Commit=${COMMIT} \
+        -X github.com/sofmeright/stagefreight/src/version.BuildDate=${BUILD_DATE}" \
       -o /out/stagefreight ./src/cli
 
 # ---- Runtime image ----
@@ -26,7 +26,7 @@ LABEL maintainer="SoFMeRight <sofmeright@gmail.com>" \
       org.opencontainers.image.title="StageFreight" \
       description="Declarative CI/CD automation CLI — detect, build, scan, and release container images from a single manifest." \
       org.opencontainers.image.description="Declarative CI/CD automation CLI — detect, build, scan, and release container images from a single manifest." \
-      org.opencontainers.image.source="https://gitlab.prplanit.com/precisionplanit/stagefreight-oci.git" \
+      org.opencontainers.image.source="https://github.com/sofmeright/stagefreight.git" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 
 # Install dependencies & useful tools.

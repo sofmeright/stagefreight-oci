@@ -1,4 +1,4 @@
-![Latest Release](https://gitlab.prplanit.com/precisionplanit/stagefreight-oci/-/badges/release.svg) ![Latest Release Status](https://gitlab.prplanit.com/precisionplanit/stagefreight-oci/-/raw/main/assets/badge-release-status.svg) [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/T6T41IT163)
+![Latest Release](assets/badge-release-status.svg) [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/T6T41IT163)
 
 # StageFreight
 
@@ -17,7 +17,7 @@
 5. **Scan** for vulnerabilities (Trivy integration, SBOM generation)
 6. **Release** across forges (GitLab, GitHub, Gitea) with notes, badges, and cross-platform sync
 
-All driven by a single `.stagefreight.yml` manifest. No platform-specific CI scripting required.
+All driven by a single [`.stagefreight.yml`](.stagefreight.yml) manifest. No platform-specific CI scripting required.
 
 ---
 
@@ -111,18 +111,19 @@ Starting from **0.2.0**, `prplanit/stagefreight` includes the Go CLI binary and 
 
 ## See Also
 
-- [StageFreight GitLab Component](https://gitlab.prplanit.com/components/stagefreight) — GitLab CI component (Ansible-based, being superseded by the Go CLI)
-- [Ansible OCI](https://gitlab.prplanit.com/precisionplanit/ansible-oci) — Docker image for Ansible playbook execution
+- [StageFreight Ansible](https://github.com/sofmeright/stagefreight-ansible) — Legacy Ansible-based GitLab CI component (archived)
 - [Roadmap](docs/RoadMap.md) — full feature roadmap and manifest examples
+- [Manifest Examples](docs/config/) — 24 example `.stagefreight.yml` configurations
+- [GitLab CI Component](templates/) — reusable CI templates for GitLab
 
 ---
 
 ## Contributing
 
-- Fork the repository at [StageFreight OCI](https://gitlab.prplanit.com/precisionplanit/stagefreight-oci)
-- Submit Merge Requests
+- Fork the repository
+- Submit Pull Requests / Merge Requests
 - Open issues with ideas, bugs, or feature requests
 
 ## License
 
-Distributed under the AGPL-3.0-only License.
+Distributed under the [AGPL-3.0-only](LICENSE) License.

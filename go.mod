@@ -1,4 +1,4 @@
-module gitlab.prplanit.com/precisionplanit/stagefreight-oci
+module github.com/sofmeright/stagefreight
 
 go 1.25
 

@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/release"
+	"github.com/sofmeright/stagefreight/src/release"
 )
 
 var (

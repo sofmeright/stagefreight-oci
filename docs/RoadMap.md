@@ -279,7 +279,7 @@ metadata:
   motto: "Hello World's a Stage"              # slogan/tagline (optional)
   license: AGPL-3.0-only                      # SPDX identifier
   homepage: https://stagefreight.dev          # project URL
-  repository: https://gitlab.prplanit.com/precisionplanit/stagefreight-oci
+  repository: https://github.com/sofmeright/stagefreight
   author: "SoFMeRight <sofmeright@gmail.com>"
 
   # Version source — where the version number comes from
@@ -294,7 +294,7 @@ metadata:
   stamp:
     # Go: injects via -ldflags at build time (no file modification needed)
     - type: go
-      package: gitlab.prplanit.com/precisionplanit/stagefreight-oci/src/version
+      package: github.com/sofmeright/stagefreight/src/version
       vars:
         Version: "{version}"
         Description: "{description}"
@@ -2136,7 +2136,7 @@ After OIDC SSO login (or other auth method), the authorized user sees everything
 │  ── Action Details ──────────────────────────     │
 │                                                  │
 │  Action:  docker push (3 registries)             │
-│  Repo:    precisionplanit/stagefreight-oci       │
+│  Repo:    sofmeright/stagefreight       │
 │  Branch:  main                                   │
 │  Commit:  abc1234 — "add multi-arch build"       │
 │  Trigger: yolo mode — auto-push after merge      │
@@ -2217,7 +2217,7 @@ Every approval decision is recorded as a structured audit event:
 {
   "id": "approve-abc123",
   "action": "docker-push",
-  "repo": "precisionplanit/stagefreight-oci",
+  "repo": "sofmeright/stagefreight",
   "branch": "main",
   "commit": "abc1234",
   "requested_at": "2026-02-22T14:30:00Z",
@@ -2368,7 +2368,7 @@ Every log event carries structured context fields that identify the operation, n
   "msg": "image pushed",
   "component": "build.image",
   "step": "push",
-  "repo": "precisionplanit/stagefreight-oci",
+  "repo": "sofmeright/stagefreight",
   "branch": "main",
   "commit": "abc1234",
   "registry": "docker.io",
