@@ -96,8 +96,8 @@ Based on **Alpine 3.22** with a statically compiled Go binary:
 | **CLI** | `stagefreight` (Go binary) |
 | **Container** | `docker-cli`, `docker-buildx` |
 | **Security** | `trivy`, `syft` |
-| **Scripting** | `bash`, `python3`, `jq`, `yq` |
-| **Utilities** | `curl`, `git`, `rsync`, `tree`, `coreutils` |
+| **SCM** | `git` |
+| **Utilities** | `tree` |
 
 ### Looking for a minimal image?
 

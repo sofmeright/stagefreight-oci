@@ -29,42 +29,32 @@ LABEL maintainer="SoFMeRight <sofmeright@gmail.com>" \
       org.opencontainers.image.source="https://github.com/sofmeright/stagefreight.git" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 
-# Install dependencies & useful tools.
+# Runtime dependencies — only what stagefreight actually shells out to.
 RUN apk add --no-cache \
-      bash \
-      coreutils \
-      curl \
       docker-cli \
       git \
-      jq \
-      python3 \
-      py3-pip \
-      py3-yaml \
-      rsync \
       tree
 
 # Pinned tool versions — bump these for updates.
-ENV YQ_VERSION=v4.44.1 \
-    BUILDX_VERSION=v0.31.1 \
+ENV BUILDX_VERSION=v0.31.1 \
     TRIVY_VERSION=0.69.1 \
     SYFT_VERSION=1.42.1
 
-# Install yq
-RUN curl -Ls "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -o /usr/bin/yq \
-    && chmod +x /usr/bin/yq
-
 # Install docker buildx
 RUN mkdir -p ~/.docker/cli-plugins && \
-    curl -Lo ~/.docker/cli-plugins/docker-buildx "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-amd64" && \
+    wget -qO ~/.docker/cli-plugins/docker-buildx \
+      "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-amd64" && \
     chmod +x ~/.docker/cli-plugins/docker-buildx
 
 # Install trivy (vulnerability scanner)
-RUN curl -Lo /tmp/trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" && \
+RUN wget -qO /tmp/trivy.tar.gz \
+      "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" && \
     tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy && \
     rm /tmp/trivy.tar.gz
 
 # Install syft (SBOM generator)
-RUN curl -Lo /tmp/syft.tar.gz "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz" && \
+RUN wget -qO /tmp/syft.tar.gz \
+      "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz" && \
     tar -xzf /tmp/syft.tar.gz -C /usr/local/bin syft && \
     rm /tmp/syft.tar.gz
 
