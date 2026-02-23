@@ -219,6 +219,47 @@ func (g *GitLabForge) CreateMR(ctx context.Context, opts MROptions) (*MR, error)
 	}, nil
 }
 
+func (g *GitLabForge) ListReleases(ctx context.Context) ([]ReleaseInfo, error) {
+	var all []ReleaseInfo
+	page := 1
+
+	for {
+		url := fmt.Sprintf("%s?per_page=100&page=%d&order_by=released_at&sort=desc", g.apiURL("/releases"), page)
+
+		var releases []struct {
+			TagName   string `json:"tag_name"`
+			CreatedAt string `json:"created_at"`
+		}
+
+		if err := g.doJSON(ctx, "GET", url, nil, &releases); err != nil {
+			return all, err
+		}
+
+		for _, r := range releases {
+			info := ReleaseInfo{
+				ID:      r.TagName,
+				TagName: r.TagName,
+			}
+			if t, err := parseTime(r.CreatedAt); err == nil {
+				info.CreatedAt = t
+			}
+			all = append(all, info)
+		}
+
+		if len(releases) < 100 {
+			break
+		}
+		page++
+	}
+
+	return all, nil
+}
+
+func (g *GitLabForge) DeleteRelease(ctx context.Context, tagName string) error {
+	releaseURL := g.apiURL(fmt.Sprintf("/releases/%s", url.PathEscape(tagName)))
+	return g.doJSON(ctx, "DELETE", releaseURL, nil, nil)
+}
+
 func (g *GitLabForge) projectWebURL() string {
 	// CI_PROJECT_PATH is already "group/project", just join with base
 	return fmt.Sprintf("%s/%s", g.BaseURL, g.ProjectID)

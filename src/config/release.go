@@ -7,6 +7,35 @@ type ReleaseConfig struct {
 
 	// Sync defines targets for cross-platform release sync.
 	Sync []SyncTarget `yaml:"sync"`
+
+	// Tags are tag templates resolved against git version info.
+	// When configured, `release create` creates additional rolling tags
+	// (e.g., "latest", "{major}.{minor}") pointing to the same commit.
+	// Uses the same template syntax as docker registry tags:
+	//   ["{version}", "{major}.{minor}", "latest"]
+	Tags []string `yaml:"tags"`
+
+	// GitTags controls which git tags trigger release auto-tagging.
+	// Uses standard pattern syntax: regex, literal, or !negated.
+	// Empty = all tags. Examples:
+	//   ["^\\d+\\.\\d+\\.\\d+$"]  — stable semver only
+	//   ["!^.*-rc"]               — exclude release candidates
+	GitTags []string `yaml:"git_tags"`
+
+	// Retention controls cleanup of old releases after a successful create.
+	// Policies are additive (restic-style): a release is kept if ANY policy wants it.
+	// Uses the same RetentionPolicy as docker tag retention.
+	//
+	// Accepts either a plain integer (shorthand for keep_last) or a policy map:
+	//
+	//   retention: 10                  # keep last 10 releases
+	//
+	//   retention:                     # restic-style policy
+	//     keep_last: 3
+	//     keep_monthly: 6
+	//
+	// Zero/empty = no cleanup.
+	Retention RetentionPolicy `yaml:"retention,omitempty"`
 }
 
 // BadgeConfig controls the release status badge.

@@ -1,6 +1,10 @@
 package forge
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // DetectProvider determines the forge platform from a git remote URL.
 func DetectProvider(remoteURL string) Provider {
@@ -59,4 +63,19 @@ func BaseURL(remoteURL string) string {
 	}
 
 	return url
+}
+
+// parseTime tries common timestamp formats returned by forge APIs.
+func parseTime(s string) (time.Time, error) {
+	for _, layout := range []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05.000Z",
+		"2006-01-02T15:04:05Z",
+		"2006-01-02T15:04:05.000-07:00",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unrecognized time format: %q", s)
 }

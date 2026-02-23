@@ -10,7 +10,9 @@ import (
 	"github.com/sofmeright/stagefreight/src/build"
 	"github.com/sofmeright/stagefreight/src/config"
 	"github.com/sofmeright/stagefreight/src/forge"
+	"github.com/sofmeright/stagefreight/src/gitver"
 	"github.com/sofmeright/stagefreight/src/release"
+	"github.com/sofmeright/stagefreight/src/retention"
 )
 
 var (
@@ -195,6 +197,41 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Auto-tagging: create rolling releases for configured tag templates
+	if len(cfg.Release.Tags) > 0 {
+		currentTag := os.Getenv("CI_COMMIT_TAG")
+		// Check if the current tag matches git_tags filter
+		if config.MatchPatterns(cfg.Release.GitTags, currentTag) || currentTag == "" {
+			rollingTags := gitver.ResolveTags(cfg.Release.Tags, versionInfo)
+			for _, rt := range rollingTags {
+				if rt == tag || rt == "" {
+					continue // skip the primary release tag
+				}
+				_, err := forgeClient.CreateRelease(ctx, forge.ReleaseOptions{
+					TagName:     rt,
+					Name:        rt,
+					Description: fmt.Sprintf("Rolling tag for %s", tag),
+					Prerelease:  rcPrerelease,
+				})
+				if err != nil {
+					// Rolling tag may already exist — try delete then recreate
+					_ = forgeClient.DeleteRelease(ctx, rt)
+					_, err = forgeClient.CreateRelease(ctx, forge.ReleaseOptions{
+						TagName:     rt,
+						Name:        rt,
+						Description: fmt.Sprintf("Rolling tag for %s", tag),
+						Prerelease:  rcPrerelease,
+					})
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "  warning: rolling tag %s: %v\n", rt, err)
+						continue
+					}
+				}
+				fmt.Printf("  → rolling tag %s\n", rt)
+			}
+		}
+	}
+
 	// Sync to other forges
 	if !rcSkipSync && len(cfg.Release.Sync) > 0 {
 		currentTag := os.Getenv("CI_COMMIT_TAG")
@@ -245,6 +282,25 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 						}
 					}
 				}
+			}
+		}
+	}
+
+	// Auto-prune: apply retention policy after successful release
+	if cfg.Release.Retention.Active() {
+		var patterns []string
+		if len(cfg.Release.Tags) > 0 {
+			patterns = retention.TemplatesToPatterns(cfg.Release.Tags)
+		}
+		store := &forgeStore{forge: forgeClient}
+		result, retErr := retention.Apply(ctx, store, patterns, cfg.Release.Retention)
+		if retErr != nil {
+			fmt.Fprintf(os.Stderr, "  warning: release retention: %v\n", retErr)
+		} else if len(result.Deleted) > 0 {
+			fmt.Printf("  retention: matched=%d kept=%d deleted=%d\n",
+				result.Matched, result.Kept, len(result.Deleted))
+			for _, d := range result.Deleted {
+				fmt.Printf("    - %s\n", d)
 			}
 		}
 	}

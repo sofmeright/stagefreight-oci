@@ -4,7 +4,10 @@
 // so StageFreight works identically regardless of where the repo is hosted.
 package forge
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Provider identifies a git forge platform.
 type Provider string
@@ -36,6 +39,12 @@ type Forge interface {
 
 	// CreateMR opens a merge/pull request.
 	CreateMR(ctx context.Context, opts MROptions) (*MR, error)
+
+	// ListReleases returns all releases, newest first.
+	ListReleases(ctx context.Context) ([]ReleaseInfo, error)
+
+	// DeleteRelease removes a release by its tag name.
+	DeleteRelease(ctx context.Context, tagName string) error
 }
 
 // ReleaseOptions configures a new release.
@@ -88,4 +97,11 @@ type MROptions struct {
 type MR struct {
 	ID  string
 	URL string
+}
+
+// ReleaseInfo describes an existing release on a forge.
+type ReleaseInfo struct {
+	ID        string    // platform-specific ID (numeric for GitHub/Gitea, tag_name for GitLab)
+	TagName   string
+	CreatedAt time.Time
 }

@@ -241,3 +241,52 @@ func (g *GitHubForge) CreateMR(ctx context.Context, opts MROptions) (*MR, error)
 		URL: resp.HTMLURL,
 	}, nil
 }
+
+func (g *GitHubForge) ListReleases(ctx context.Context) ([]ReleaseInfo, error) {
+	var all []ReleaseInfo
+	page := 1
+
+	for {
+		url := fmt.Sprintf("%s?per_page=100&page=%d", g.apiURL("/releases"), page)
+
+		var releases []struct {
+			ID        int    `json:"id"`
+			TagName   string `json:"tag_name"`
+			CreatedAt string `json:"created_at"`
+		}
+
+		if err := g.doJSON(ctx, "GET", url, nil, &releases); err != nil {
+			return all, err
+		}
+
+		for _, r := range releases {
+			info := ReleaseInfo{
+				ID:      fmt.Sprintf("%d", r.ID),
+				TagName: r.TagName,
+			}
+			if t, err := parseTime(r.CreatedAt); err == nil {
+				info.CreatedAt = t
+			}
+			all = append(all, info)
+		}
+
+		if len(releases) < 100 {
+			break
+		}
+		page++
+	}
+
+	return all, nil
+}
+
+func (g *GitHubForge) DeleteRelease(ctx context.Context, tagName string) error {
+	// GitHub requires the release ID, not tag name, for deletion.
+	// Find the release ID from the tag.
+	var rel struct {
+		ID int `json:"id"`
+	}
+	if err := g.doJSON(ctx, "GET", g.apiURL("/releases/tags/"+tagName), nil, &rel); err != nil {
+		return fmt.Errorf("finding release for tag %s: %w", tagName, err)
+	}
+	return g.doJSON(ctx, "DELETE", g.apiURL(fmt.Sprintf("/releases/%d", rel.ID)), nil, nil)
+}
