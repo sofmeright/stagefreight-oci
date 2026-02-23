@@ -157,8 +157,9 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  → uploaded %s\n", assetName)
 	}
 
-	// Add registry image links
+	// Add registry image links (deduplicate by URL)
 	if rcRegistryLinks && len(cfg.Docker.Registries) > 0 {
+		linkedURLs := make(map[string]bool)
 		for _, reg := range cfg.Docker.Registries {
 			provider := reg.Provider
 			if provider == "" {
@@ -166,6 +167,11 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 			}
 
 			link := buildRegistryLink(reg, tag, provider)
+			if linkedURLs[link.URL] {
+				continue
+			}
+			linkedURLs[link.URL] = true
+
 			if err := forgeClient.AddReleaseLink(ctx, rel.ID, link); err != nil {
 				fmt.Fprintf(os.Stderr, "  warning: failed to add registry link for %s: %v\n", reg.URL, err)
 				continue

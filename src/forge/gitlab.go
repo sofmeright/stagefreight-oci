@@ -183,7 +183,13 @@ func (g *GitLabForge) CommitFile(ctx context.Context, opts CommitFileOptions) er
 	}
 	encodedPath := url.PathEscape(opts.Path)
 	fileURL := g.apiURL(fmt.Sprintf("/repository/files/%s", encodedPath))
-	return g.doJSON(ctx, "PUT", fileURL, payload, nil)
+
+	// Try update first (PUT), fall back to create (POST) if file doesn't exist.
+	err := g.doJSON(ctx, "PUT", fileURL, payload, nil)
+	if err != nil {
+		return g.doJSON(ctx, "POST", fileURL, payload, nil)
+	}
+	return nil
 }
 
 func (g *GitLabForge) CreateMR(ctx context.Context, opts MROptions) (*MR, error) {
