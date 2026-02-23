@@ -43,17 +43,30 @@ RUN apk add --no-cache \
       rsync \
       tree
 
-# Install yq
+# Pinned tool versions — bump these for updates.
 ENV YQ_VERSION=v4.44.1 \
-    YQ_BINARY=yq_linux_amd64
-RUN curl -Ls "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${YQ_BINARY}" -o /usr/bin/yq \
+    BUILDX_VERSION=v0.31.1 \
+    TRIVY_VERSION=0.69.1 \
+    SYFT_VERSION=1.42.1
+
+# Install yq
+RUN curl -Ls "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -o /usr/bin/yq \
     && chmod +x /usr/bin/yq
 
-# Installs the latest buildx release at build time.
+# Install docker buildx
 RUN mkdir -p ~/.docker/cli-plugins && \
-    LATEST_BUILDX_VERSION=$(curl -s https://api.github.com/repos/docker/buildx/releases/latest | jq -r .tag_name) && \
-    curl -Lo ~/.docker/cli-plugins/docker-buildx "https://github.com/docker/buildx/releases/download/${LATEST_BUILDX_VERSION}/buildx-${LATEST_BUILDX_VERSION}.linux-amd64" && \
+    curl -Lo ~/.docker/cli-plugins/docker-buildx "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-amd64" && \
     chmod +x ~/.docker/cli-plugins/docker-buildx
+
+# Install trivy (vulnerability scanner)
+RUN curl -Lo /tmp/trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" && \
+    tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy && \
+    rm /tmp/trivy.tar.gz
+
+# Install syft (SBOM generator)
+RUN curl -Lo /tmp/syft.tar.gz "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz" && \
+    tar -xzf /tmp/syft.tar.gz -C /usr/local/bin syft && \
+    rm /tmp/syft.tar.gz
 
 # Copy the Go binary from builder stage.
 COPY --from=builder /out/stagefreight /usr/local/bin/stagefreight
