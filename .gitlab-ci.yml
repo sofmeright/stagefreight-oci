@@ -10,7 +10,7 @@ workflow:
 
 build-image:
   stage: build
-  image: docker.jcr.pcfae.com/prplanit/stagefreight:0.2.0-alpha.4
+  image: docker.jcr.pcfae.com/prplanit/stagefreight:0.2.0-alpha.5
   interruptible: true
   services:
     - name: docker.jcr.pcfae.com/docker:27-dind
@@ -39,7 +39,7 @@ build-image:
 
 security-scan:
   stage: security
-  image: docker.jcr.pcfae.com/prplanit/stagefreight:0.2.0-alpha.4
+  image: docker.jcr.pcfae.com/prplanit/stagefreight:0.2.0-alpha.5
   interruptible: true
   needs: [build-image]
   services:
@@ -66,7 +66,7 @@ security-scan:
 
 create-release:
   stage: release
-  image: docker.jcr.pcfae.com/prplanit/stagefreight:0.2.0-alpha.4
+  image: docker.jcr.pcfae.com/prplanit/stagefreight:0.2.0-alpha.5
   variables:
     GIT_DEPTH: 0
   needs:

@@ -10,7 +10,7 @@
   - **StageFreight builds itself (dogfood).** Use the previous release image to build:
     ```bash
     docker run --rm -v "$PWD":/src -w /src -v /var/run/docker.sock:/var/run/docker.sock \
-      docker.io/prplanit/stagefreight:0.2.0-alpha.4 stagefreight docker build --local
+      docker.io/prplanit/stagefreight:0.2.0-alpha.5 stagefreight docker build --local
     ```
   - `--dry-run` to verify plan resolution without building. `--local` to load into daemon without pushing.
   - **CI pipeline** (`.gitlab-ci.yml`): Same dogfood approach — CI image is the previous release. `stagefreight docker build` handles detect → lint → plan → build → push → retention.
