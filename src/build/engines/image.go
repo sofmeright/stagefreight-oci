@@ -184,7 +184,8 @@ func registryAllowed(reg config.RegistryConfig, branch, gitTag string) bool {
 	if !config.MatchPatterns(reg.Branches, branch) {
 		return false
 	}
-	if gitTag != "" && !config.MatchPatterns(reg.GitTags, gitTag) {
+	// If registry specifies git_tags filters, require a matching git tag
+	if len(reg.GitTags) > 0 && (gitTag == "" || !config.MatchPatterns(reg.GitTags, gitTag)) {
 		return false
 	}
 	return true
