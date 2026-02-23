@@ -1,23 +1,37 @@
-![Latest Release](assets/badge-release-status.svg) [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/T6T41IT163)
+![Latest Release](assets/badge-release-status.svg)
 
 # StageFreight
 
-> A declarative CI/CD automation CLI that detects, builds, scans, and releases container images across forges and registries — from a single manifest.
+> *Hello World's a Stage*
 
----
+A declarative CI/CD automation CLI that detects, builds, scans, and releases container images across forges and registries — from a single manifest. StageFreight is open-source, self-building, and replaces fragile shell-script CI pipelines with a single Go binary driven by one [`.stagefreight.yml`](.stagefreight.yml) file.
 
-## Overview
+### Features:
 
-**StageFreight** is a Go CLI and container image that replaces fragile shell-script CI pipelines with a single binary. Point it at a repository and it will:
+|                                |                                                                                                           |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| **Detect → Plan → Build**      | Finds Dockerfiles, resolves tags from git, builds multi-platform images via `docker buildx`               |
+| **Multi-Registry Push**        | Docker Hub, GHCR, GitLab, Quay, Harbor, JFrog, Gitea — with branch/tag filtering via regex (`!` negation) |
+| **Security Scanning**          | Trivy vulnerability scan + Syft SBOM generation, configurable detail levels per branch or tag pattern      |
+| **Cross-Forge Releases**       | Create releases on GitLab, GitHub, or Gitea with auto-generated notes, badges, and cross-platform sync    |
+| **Cache-Aware Linting**        | 7 lint modules run in parallel, delta-only on changed files, with JUnit reporting for CI                  |
+| **Retention Policies**         | Restic-style tag retention (keep_last, daily, weekly, monthly, yearly) across all registry providers       |
+| **Self-Building**              | StageFreight builds itself — this image is produced by `stagefreight docker build`                        |
 
-1. **Detect** the project layout (Dockerfiles, languages, git metadata)
-2. **Plan** the build (resolve tags, platforms, registries, build args)
-3. **Lint** the changeset (secrets, conflicts, large files, encoding — cache-aware, delta-only)
-4. **Build** container images via `docker buildx` (multi-platform, multi-registry)
-5. **Scan** for vulnerabilities (Trivy integration, SBOM generation)
-6. **Release** across forges (GitLab, GitHub, Gitea) with notes, badges, and cross-platform sync
+### Public Resources:
 
-All driven by a single [`.stagefreight.yml`](.stagefreight.yml) manifest. No platform-specific CI scripting required.
+|                  |                                                                                          |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| Docker Images    | [Docker Hub](https://hub.docker.com/r/prplanit/stagefreight)                             |
+| Source Code      | [GitHub](https://github.com/sofmeright/stagefreight) / [GitLab](https://gitlab.prplanit.com/precisionplanit/stagefreight) |
+
+### Documentation:
+
+|                     |                                                                 |
+| ------------------- | --------------------------------------------------------------- |
+| Manifest Examples   | [24 Example Configs](docs/config/README.md)                     |
+| Roadmap             | [Full Vision](docs/RoadMap.md)                                  |
+| GitLab CI Component | [Reusable Template](templates/docker-build.yml)                 |
 
 ---
 
@@ -33,8 +47,8 @@ docker:
     - url: docker.io
       path: yourorg/yourapp
       tags: ["{version}", "latest"]
-      branches: ["^main$"]
-      credentials: DOCKERHUB
+      git_tags: ["^\\d+\\.\\d+\\.\\d+$"]
+      credentials: DOCKER
 ```
 
 ```yaml
@@ -42,7 +56,7 @@ docker:
 build-image:
   image: docker.io/prplanit/stagefreight:latest
   services:
-    - docker:24.0.5-dind
+    - docker:27-dind
   script:
     - stagefreight docker build
   rules:
@@ -59,22 +73,10 @@ docker run --rm -v "$(pwd)":/src -w /src \
 
 ---
 
-## Key Features
-
-- **Declarative manifest** — one `.stagefreight.yml` drives everything, no shell scripts
-- **Auto-detection** — finds Dockerfiles, injects VERSION/COMMIT/BUILD_DATE build args from git
-- **Multi-registry push** — Docker Hub, GHCR, GitLab, Quay, Harbor, JFrog — with branch/tag filtering via regex patterns (`!` negation supported)
-- **Security scanning** — Trivy vulnerability scan with configurable detail levels (none/counts/detailed/full) per branch or tag pattern
-- **Cross-forge releases** — create releases on GitLab, sync to GitHub/Gitea mirrors with assets and badges
-- **Cache-aware linting** — 7 lint modules run in parallel, only on changed files
-- **Self-building** — StageFreight builds itself (this image is produced by `stagefreight docker build`)
-
----
-
 ## CLI Commands
 
 ```
-stagefreight docker build    # detect → plan → lint → build → push
+stagefreight docker build    # detect → plan → lint → build → push → retention
 stagefreight lint             # run lint modules on the working tree
 stagefreight security scan    # trivy scan + SBOM generation
 stagefreight release create   # create forge release with notes + sync
@@ -93,12 +95,11 @@ Based on **Alpine 3.22** with a statically compiled Go binary:
 |----------|-------|
 | **CLI** | `stagefreight` (Go binary) |
 | **Container** | `docker-cli`, `docker-buildx` |
+| **Security** | `trivy`, `syft` |
 | **Scripting** | `bash`, `python3`, `jq`, `yq` |
 | **Utilities** | `curl`, `git`, `rsync`, `tree`, `coreutils` |
 
 ### Looking for a minimal image?
-
-If you need a pure DevOps toolchain image without the StageFreight CLI (just Ansible, scripts, etc.), use older tags or our dedicated Ansible image:
 
 | Image | Purpose |
 |-------|---------|
@@ -109,20 +110,25 @@ Starting from **0.2.0**, `prplanit/stagefreight` includes the Go CLI binary and 
 
 ---
 
-## See Also
-
-- [StageFreight Ansible](https://github.com/sofmeright/stagefreight-ansible) — Legacy Ansible-based GitLab CI component (archived)
-- [Roadmap](docs/RoadMap.md) — full feature roadmap and manifest examples
-- [Manifest Examples](docs/config/) — 24 example `.stagefreight.yml` configurations
-- [GitLab CI Component](templates/) — reusable CI templates for GitLab
-
----
-
 ## Contributing
 
 - Fork the repository
 - Submit Pull Requests / Merge Requests
 - Open issues with ideas, bugs, or feature requests
+
+## Support / Sponsorship
+
+If you'd like to help support this project and others like it, I have this donation link:
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/T6T41IT163)
+
+---
+
+## Disclaimer
+
+The Software provided hereunder is licensed "as-is," without warranties of any kind. The developer makes no promises about functionality, performance, or availability. Not responsible if StageFreight replaces your entire CI pipeline and you find yourself with free time you didn't expect, your retention policies work so well your registry bill drops and finance gets confused, or your release notes become more detailed than the actual features they describe.
+
+Any resemblance to working software is entirely intentional but not guaranteed. The developer claims no credit for anything that actually goes right — that's all you and the unstoppable force of the Open Source community.
 
 ## License
 
