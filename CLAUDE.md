@@ -10,7 +10,7 @@
   - **StageFreight builds itself (dogfood).** Use the previous release image to build:
     ```bash
     docker run --rm -v "$PWD":/src -w /src -v /var/run/docker.sock:/var/run/docker.sock \
-      docker.io/prplanit/stagefreight:0.2.0-alpha.1 stagefreight docker build --local
+      docker.io/prplanit/stagefreight:0.2.0-alpha.2 stagefreight docker build --local
     ```
   - `--dry-run` to verify plan resolution without building. `--local` to load into daemon without pushing.
   - **CI pipeline** (`.gitlab-ci.yml`): Same dogfood approach — CI image is the previous release. `stagefreight docker build` handles detect → lint → plan → build → push → retention.
@@ -19,7 +19,7 @@
   - Go CLI at `src/cli/main.go`, commands under `src/cli/cmd/`
   - Build engine: `src/build/` (plan, buildx, tags, version detection)
   - Registry providers: `src/registry/` (dockerhub, ghcr, gitlab, quay, jfrog, harbor, gitea, local)
-  - Forge abstraction: `src/forge/` (GitLab implemented, GitHub/Gitea planned)
+  - Forge abstraction: `src/forge/` (GitLab, GitHub, Gitea/Forgejo)
   - Lint engine: `src/lint/` with modules under `src/lint/modules/`
   - Config: `src/config/` — parsed from `.stagefreight.yml`
 
