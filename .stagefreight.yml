@@ -14,7 +14,6 @@ docker:
         - "{major}.{minor}"    # 0.2
         - "{major}"            # 0
         - "latest"
-      branches: ["^main$"]
       git_tags: ["^\\d+\\.\\d+\\.\\d+$"]
       credentials: DOCKER
 
@@ -24,7 +23,6 @@ docker:
       path: prplanit/stagefreight
       tags:
         - "{version}"          # 0.2.0-alpha.1
-      branches: ["^main$"]
       git_tags: ["\\d+\\.\\d+\\.\\d+-.+"]
       credentials: DOCKER
 
