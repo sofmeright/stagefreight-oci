@@ -28,11 +28,12 @@ docker:
 
     # ── Docker Hub: dev builds on every commit ───────────────────────
     # Ephemeral builds for testing. No git tag required.
-    # Retention keeps last 10 dev tags.
+    # Retention keeps last 5 dev tags (sha-tagged only; latest-dev is excluded).
     - url: docker.io
       path: prplanit/stagefreight
       tags:
         - "dev-{sha:8}"               # dev-abc12345
+        - "latest-dev"                 # always points to newest dev build
       branches: ["^main$"]
       credentials: DOCKER
-      retention: 10
+      retention: 6
