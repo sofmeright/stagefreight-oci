@@ -15,6 +15,14 @@ type Module interface {
 	AutoDetect() []string // glob patterns that trigger auto-enable
 }
 
+// ConfigurableModule is implemented by modules that accept YAML options.
+// The engine calls Configure after construction if the module's config
+// section contains an options map.
+type ConfigurableModule interface {
+	Module
+	Configure(opts map[string]any) error
+}
+
 var (
 	registryMu sync.RWMutex
 	registry   = map[string]func() Module{}

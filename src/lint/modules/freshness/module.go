@@ -1,0 +1,229 @@
+package freshness
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"strings"
+
+	"github.com/sofmeright/stagefreight/src/lint"
+)
+
+// freshnessModule implements lint.Module and lint.ConfigurableModule.
+type freshnessModule struct {
+	cfg    FreshnessConfig
+	http   *httpClient
+}
+
+func newModule() *freshnessModule {
+	return &freshnessModule{cfg: DefaultConfig()}
+}
+
+func (m *freshnessModule) Name() string        { return "freshness" }
+func (m *freshnessModule) DefaultEnabled() bool { return true }
+
+func (m *freshnessModule) AutoDetect() []string {
+	return []string{
+		"Dockerfile*",
+		"*.dockerfile",
+		"go.mod",
+		"Cargo.toml",
+		"package.json",
+		"requirements*.txt",
+		"Pipfile",
+	}
+}
+
+// Configure implements lint.ConfigurableModule.
+func (m *freshnessModule) Configure(opts map[string]any) error {
+	cfg, err := parseConfig(opts)
+	if err != nil {
+		return err
+	}
+	m.cfg = cfg
+	m.http = newHTTPClient(cfg.Timeout)
+	return nil
+}
+
+// Check dispatches to the appropriate checker based on filename.
+// Each checker extracts []Dependency, resolves latest versions, and
+// converts to lint findings. The raw dependencies are preserved for
+// future update commands.
+func (m *freshnessModule) Check(ctx context.Context, file lint.FileInfo) ([]lint.Finding, error) {
+	// Lazy-init HTTP client if Configure was not called (defaults).
+	if m.http == nil {
+		m.http = newHTTPClient(m.cfg.Timeout)
+	}
+
+	base := filepath.Base(file.Path)
+
+	var deps []Dependency
+	var err error
+
+	switch {
+	case isDockerfile(base):
+		deps, err = m.checkDockerfile(ctx, file)
+	case base == "go.mod":
+		deps, err = m.checkGoMod(ctx, file)
+	case base == "Cargo.toml":
+		deps, err = m.checkCargo(ctx, file)
+	case base == "package.json":
+		deps, err = m.checkNpm(ctx, file)
+	case base == "requirements.txt" || strings.HasPrefix(base, "requirements") && strings.HasSuffix(base, ".txt"):
+		deps, err = m.checkPip(ctx, file)
+	case base == "Pipfile":
+		deps, err = m.checkPip(ctx, file)
+	default:
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Correlate known vulnerabilities via OSV.
+	m.correlateVulns(ctx, deps)
+
+	return m.depsToFindings(deps), nil
+}
+
+// depsToFindings converts resolved dependencies into lint findings,
+// applying package rules, severity mapping, tolerance, vulnerability
+// escalation, and ignore rules.
+func (m *freshnessModule) depsToFindings(deps []Dependency) []lint.Finding {
+	var findings []lint.Finding
+
+	for _, dep := range deps {
+		if m.cfg.isIgnored(dep.Name) {
+			continue
+		}
+		if m.cfg.isDisabledByRule(dep) {
+			continue
+		}
+		if !m.cfg.sourceEnabled(dep.Ecosystem) {
+			continue
+		}
+
+		// Emit vulnerability findings regardless of version freshness.
+		// A dep can be on the latest version and still have unpatched CVEs.
+		findings = append(findings, m.vulnFindings(dep)...)
+
+		if dep.Latest == "" || dep.Current == dep.Latest {
+			continue
+		}
+
+		delta := compareVersionStrings(dep.Current, dep.Latest)
+		if delta.IsZero() {
+			// Versions parsed equal — might be non-semver difference.
+			if dep.Current != dep.Latest {
+				findings = append(findings, lint.Finding{
+					File:     dep.File,
+					Line:     dep.Line,
+					Module:   "freshness",
+					Severity: lint.SeverityInfo,
+					Message:  fmt.Sprintf("%s %s → %s available", dep.Name, dep.Current, dep.Latest),
+				})
+			}
+			continue
+		}
+
+		// Determine the dominant update type for rule matching.
+		updateType := dominantUpdateType(delta)
+
+		// Resolve effective severity config (global → package rule override).
+		sevCfg := m.cfg.effectiveSeverity(dep, updateType)
+
+		sev, msg, ok := mapSeverity(delta, sevCfg)
+		if !ok && len(dep.Vulnerabilities) == 0 {
+			continue // within tolerance and no CVEs
+		}
+		if !ok {
+			// Within version tolerance but has CVEs — still report.
+			sev = lint.SeverityInfo
+			msg = "within tolerance"
+		}
+
+		// Escalate severity if dep has known vulnerabilities and override is on.
+		if len(dep.Vulnerabilities) > 0 && m.cfg.vulnSeverityOverride() {
+			sev = lint.SeverityCritical
+		}
+
+		finding := lint.Finding{
+			File:     dep.File,
+			Line:     dep.Line,
+			Module:   "freshness",
+			Severity: sev,
+			Message:  fmt.Sprintf("%s %s → %s available (%s)", dep.Name, dep.Current, dep.Latest, msg),
+		}
+
+		// Annotate CVE count if present.
+		if n := len(dep.Vulnerabilities); n > 0 {
+			finding.Message += fmt.Sprintf(" [%d CVE(s)]", n)
+		}
+
+		// Annotate group if a package rule assigns one.
+		if group := m.cfg.groupForDep(dep, updateType); group != "" {
+			finding.Message += fmt.Sprintf(" [group: %s]", group)
+		}
+
+		findings = append(findings, finding)
+	}
+
+	return findings
+}
+
+// vulnFindings produces individual findings for each known vulnerability.
+func (m *freshnessModule) vulnFindings(dep Dependency) []lint.Finding {
+	if len(dep.Vulnerabilities) == 0 {
+		return nil
+	}
+
+	var findings []lint.Finding
+	for _, v := range dep.Vulnerabilities {
+		sev := vulnSeverityToLint(v.Severity)
+		msg := fmt.Sprintf("%s@%s has known vulnerability %s: %s", dep.Name, dep.Current, v.ID, v.Summary)
+		if v.FixedIn != "" {
+			msg += fmt.Sprintf(" (fixed in %s)", v.FixedIn)
+		}
+		findings = append(findings, lint.Finding{
+			File:     dep.File,
+			Line:     dep.Line,
+			Module:   "freshness",
+			Severity: sev,
+			Message:  msg,
+		})
+	}
+	return findings
+}
+
+// vulnSeverityToLint maps OSV severity labels to lint severity.
+func vulnSeverityToLint(sev string) lint.Severity {
+	switch strings.ToUpper(sev) {
+	case "CRITICAL", "HIGH":
+		return lint.SeverityCritical
+	case "MODERATE":
+		return lint.SeverityWarning
+	default:
+		return lint.SeverityInfo
+	}
+}
+
+// dominantUpdateType returns "major", "minor", or "patch" for the
+// highest-priority axis in a delta.
+func dominantUpdateType(d VersionDelta) string {
+	if d.Major > 0 {
+		return "major"
+	}
+	if d.Minor > 0 {
+		return "minor"
+	}
+	return "patch"
+}
+
+// isDockerfile returns true for Dockerfile, Dockerfile.*, and *.dockerfile.
+func isDockerfile(base string) bool {
+	if base == "Dockerfile" || strings.HasPrefix(base, "Dockerfile.") {
+		return true
+	}
+	return strings.HasSuffix(base, ".dockerfile")
+}

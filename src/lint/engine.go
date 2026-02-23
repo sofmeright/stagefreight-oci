@@ -44,6 +44,9 @@ func NewEngine(cfg config.LintConfig, rootDir string, moduleNames []string, skip
 			if err != nil {
 				return nil, err
 			}
+			if err := configureModule(m, cfg, name); err != nil {
+				return nil, err
+			}
 			modules = append(modules, m)
 		}
 	} else {
@@ -63,6 +66,9 @@ func NewEngine(cfg config.LintConfig, rootDir string, moduleNames []string, skip
 			}
 
 			if m.DefaultEnabled() {
+				if err := configureModule(m, cfg, name); err != nil {
+					return nil, err
+				}
 				modules = append(modules, m)
 			}
 		}
@@ -229,6 +235,20 @@ func (e *Engine) isExcluded(path string) bool {
 		}
 	}
 	return false
+}
+
+// configureModule passes YAML options to modules that implement ConfigurableModule.
+func configureModule(m Module, cfg config.LintConfig, name string) error {
+	cm, ok := m.(ConfigurableModule)
+	if !ok {
+		return nil
+	}
+	mc, exists := cfg.Modules[name]
+	if !exists || mc.Options == nil {
+		// Call with empty map so the module can apply defaults.
+		return cm.Configure(nil)
+	}
+	return cm.Configure(mc.Options)
 }
 
 func (e *Engine) moduleConfigJSON(name string) string {
