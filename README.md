@@ -31,7 +31,7 @@ A declarative CI/CD automation CLI that detects, builds, scans, and releases con
 | ------------------- | --------------------------------------------------------------- |
 | Manifest Examples   | [24 Example Configs](docs/config/README.md)                     |
 | Roadmap             | [Full Vision](docs/RoadMap.md)                                  |
-| GitLab CI Component | [Reusable Template](templates/docker-build.yml)                 |
+| GitLab CI Component | [Docker Build](templates/stagefreight.yml) · [Component Release](templates/component-release.yml) |
 
 ---
 

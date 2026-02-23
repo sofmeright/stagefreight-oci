@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/sofmeright/stagefreight/src/build"
@@ -21,6 +22,7 @@ var (
 	rcPrerelease      bool
 	rcAssets          []string
 	rcRegistryLinks   bool
+	rcCatalogLinks    bool
 	rcSkipSync        bool
 )
 
@@ -45,6 +47,7 @@ func init() {
 	releaseCreateCmd.Flags().BoolVar(&rcPrerelease, "prerelease", false, "mark as prerelease")
 	releaseCreateCmd.Flags().StringSliceVar(&rcAssets, "asset", nil, "files to attach to release (repeatable)")
 	releaseCreateCmd.Flags().BoolVar(&rcRegistryLinks, "registry-links", true, "add registry image links to release")
+	releaseCreateCmd.Flags().BoolVar(&rcCatalogLinks, "catalog-links", true, "add GitLab Catalog link to release")
 	releaseCreateCmd.Flags().BoolVar(&rcSkipSync, "skip-sync", false, "skip syncing to other forges")
 
 	releaseCmd.AddCommand(releaseCreateCmd)
@@ -180,6 +183,18 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Add GitLab Catalog link
+	if rcCatalogLinks && cfg.Component.Catalog && provider == forge.GitLab {
+		catalogLink := buildCatalogLink(remoteURL, tag)
+		if catalogLink.URL != "" {
+			if err := forgeClient.AddReleaseLink(ctx, rel.ID, catalogLink); err != nil {
+				fmt.Fprintf(os.Stderr, "  warning: failed to add catalog link: %v\n", err)
+			} else {
+				fmt.Printf("  → linked %s\n", catalogLink.Name)
+			}
+		}
+	}
+
 	// Sync to other forges
 	if !rcSkipSync && len(cfg.Release.Sync) > 0 {
 		currentTag := os.Getenv("CI_COMMIT_TAG")
@@ -312,6 +327,74 @@ func repoFromPath(path string) string {
 		}
 	}
 	return path
+}
+
+// buildCatalogLink creates a GitLab Catalog release link for a component project.
+func buildCatalogLink(remoteURL, tag string) forge.ReleaseLink {
+	// Try CI env first (most reliable in GitLab CI).
+	if serverURL := os.Getenv("CI_SERVER_URL"); serverURL != "" {
+		if projectPath := os.Getenv("CI_PROJECT_PATH"); projectPath != "" {
+			return forge.ReleaseLink{
+				Name:     fmt.Sprintf("GitLab Catalog %s", tag),
+				URL:      fmt.Sprintf("%s/explore/catalog/%s", serverURL, projectPath),
+				LinkType: "other",
+			}
+		}
+	}
+
+	// Fallback: extract from remote URL.
+	projectPath := projectPathFromRemote(remoteURL)
+	if projectPath == "" {
+		return forge.ReleaseLink{}
+	}
+
+	baseURL := forge.BaseURL(remoteURL)
+	return forge.ReleaseLink{
+		Name:     fmt.Sprintf("GitLab Catalog %s", tag),
+		URL:      fmt.Sprintf("%s/explore/catalog/%s", baseURL, projectPath),
+		LinkType: "other",
+	}
+}
+
+// projectPathFromRemote extracts the "org/repo" project path from a git remote URL.
+// Handles SSH (git@host:org/repo.git) and HTTPS (https://host/org/repo.git).
+func projectPathFromRemote(remoteURL string) string {
+	url := remoteURL
+
+	// SSH format: git@host:org/repo.git or git@host:port:org/repo.git
+	if idx := strings.Index(url, ":"); idx >= 0 && !strings.HasPrefix(url, "http") {
+		path := url[idx+1:]
+		// Handle SSH with port: git@host:port/org/repo.git
+		if slashIdx := strings.Index(path, "/"); slashIdx >= 0 {
+			// Check if part before / is a port number
+			possiblePort := path[:slashIdx]
+			isPort := true
+			for _, c := range possiblePort {
+				if c < '0' || c > '9' {
+					isPort = false
+					break
+				}
+			}
+			if isPort {
+				path = path[slashIdx+1:]
+			}
+		}
+		return strings.TrimSuffix(path, ".git")
+	}
+
+	// HTTPS format: https://host/org/repo.git
+	for _, prefix := range []string{"https://", "http://"} {
+		if strings.HasPrefix(url, prefix) {
+			withoutScheme := strings.TrimPrefix(url, prefix)
+			// Remove host
+			if slashIdx := strings.Index(withoutScheme, "/"); slashIdx >= 0 {
+				path := withoutScheme[slashIdx+1:]
+				return strings.TrimSuffix(path, ".git")
+			}
+		}
+	}
+
+	return ""
 }
 
 // syncAllowed checks if a sync target should be activated for the current tag/branch.
