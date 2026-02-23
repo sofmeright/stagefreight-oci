@@ -37,3 +37,11 @@ docker:
       branches: ["^main$"]
       credentials: DOCKER
       retention: 6
+
+component:
+  spec_files:
+    - "templates/stagefreight.yml"
+    - "templates/component-release.yml"
+  readme:
+    file: "README.md"
+  catalog: true
