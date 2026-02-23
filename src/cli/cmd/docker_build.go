@@ -277,6 +277,11 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 		output.SectionEnd(w, "sf_push")
 	}
 
+	// --- README Sync ---
+	if cfg.Docker.Readme.IsActive() && !dbLocal {
+		runReadmeSync(ctx, w, ci, cfg.Docker.Readme, cfg.Docker.Registries, rootDir)
+	}
+
 	// --- Retention ---
 	if hasRetention(plan) {
 		retentionErr := runRetention(ctx, w, ci, plan)

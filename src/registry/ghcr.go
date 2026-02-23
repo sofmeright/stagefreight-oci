@@ -125,6 +125,8 @@ func (g *GHCR) DeleteTag(ctx context.Context, repo string, tag string) error {
 	return nil
 }
 
+func (g *GHCR) UpdateDescription(_ context.Context, _, _, _ string) error { return nil }
+
 func (g *GHCR) findVersionID(ctx context.Context, owner, pkg, tag string) (int, error) {
 	page := 1
 	for {

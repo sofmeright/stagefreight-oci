@@ -91,6 +91,19 @@ func (q *Quay) DeleteTag(ctx context.Context, repo string, tag string) error {
 	return nil
 }
 
+func (q *Quay) UpdateDescription(ctx context.Context, repo, short, full string) error {
+	payload := map[string]string{
+		"description": short,
+	}
+
+	apiURL := fmt.Sprintf("%s/api/v1/repository/%s", q.baseURL, url.PathEscape(repo))
+	_, err := q.client.doJSON(ctx, "PUT", apiURL, payload, nil)
+	if err != nil {
+		return fmt.Errorf("quay: updating description for %s: %w", repo, err)
+	}
+	return nil
+}
+
 // normalizeURL ensures a URL has a scheme.
 func normalizeURL(u string) string {
 	if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {

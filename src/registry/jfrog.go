@@ -94,6 +94,8 @@ func (j *JFrog) DeleteTag(ctx context.Context, repo string, tag string) error {
 	return nil
 }
 
+func (j *JFrog) UpdateDescription(_ context.Context, _, _, _ string) error { return nil }
+
 // splitJFrogRepo splits "repoKey/image/path" into the repo key and image path.
 // If no slash, assumes the whole string is the image path in a "docker-local" repo.
 func splitJFrogRepo(repo string) (repoKey, imagePath string) {

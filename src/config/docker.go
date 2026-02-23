@@ -9,6 +9,35 @@ type DockerConfig struct {
 	BuildArgs  map[string]string `yaml:"build_args"`
 	Registries []RegistryConfig  `yaml:"registries"`
 	Cache      CacheConfig       `yaml:"cache"`
+	Readme     DockerReadmeConfig `yaml:"readme"`
+}
+
+// DockerReadmeConfig controls README sync to container registries.
+type DockerReadmeConfig struct {
+	Enabled     *bool           `yaml:"enabled"`
+	File        string          `yaml:"file"`
+	Description string          `yaml:"description"`
+	LinkBase    string          `yaml:"link_base"`
+	Markers     *bool           `yaml:"markers"`
+	StartMarker string          `yaml:"start_marker"`
+	EndMarker   string          `yaml:"end_marker"`
+	Transforms  []TransformRule `yaml:"transforms"`
+}
+
+// TransformRule defines a regex find/replace applied to README content.
+type TransformRule struct {
+	Pattern string `yaml:"pattern"`
+	Replace string `yaml:"replace"`
+}
+
+// IsActive returns true if readme sync is explicitly enabled or any field is set.
+func (r DockerReadmeConfig) IsActive() bool {
+	if r.Enabled != nil {
+		return *r.Enabled
+	}
+	return r.File != "" || r.Description != "" || r.LinkBase != "" ||
+		r.Markers != nil || r.StartMarker != "" || r.EndMarker != "" ||
+		len(r.Transforms) > 0
 }
 
 // RegistryConfig defines a registry push target.
@@ -18,6 +47,7 @@ type RegistryConfig struct {
 	Tags        []string `yaml:"tags"`
 	Credentials string   `yaml:"credentials"` // env var prefix for auth (e.g., "DOCKERHUB" → DOCKERHUB_USER/DOCKERHUB_PASS)
 	Provider    string   `yaml:"provider"`    // registry vendor: dockerhub, ghcr, gitlab, jfrog, harbor, quay, gitea, generic
+	Description string   `yaml:"description"` // per-registry short description override for readme sync
 
 	// Branches controls which branches push to this registry.
 	// Uses standard pattern syntax: regex, literal, or !negated.

@@ -84,6 +84,8 @@ func (l *Local) DeleteTag(ctx context.Context, repo string, tag string) error {
 	return nil
 }
 
+func (l *Local) UpdateDescription(_ context.Context, _, _, _ string) error { return nil }
+
 // parseDockerTimestamp parses the various timestamp formats docker images outputs.
 func parseDockerTimestamp(s string) time.Time {
 	// Docker outputs different formats depending on version/platform.

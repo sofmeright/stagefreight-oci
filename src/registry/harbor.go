@@ -100,6 +100,23 @@ func (h *Harbor) DeleteTag(ctx context.Context, repo string, tag string) error {
 	return nil
 }
 
+func (h *Harbor) UpdateDescription(ctx context.Context, repo, short, full string) error {
+	project, _ := splitHarborRepo(repo)
+
+	payload := map[string]interface{}{
+		"metadata": map[string]string{
+			"description": short,
+		},
+	}
+
+	apiURL := fmt.Sprintf("%s/api/v2.0/projects/%s", h.baseURL, url.PathEscape(project))
+	_, err := h.client.doJSON(ctx, "PUT", apiURL, payload, nil)
+	if err != nil {
+		return fmt.Errorf("harbor: updating description for %s: %w", repo, err)
+	}
+	return nil
+}
+
 // splitHarborRepo splits "project/repo" into project and repository name.
 // Handles nested repos like "project/sub/repo" → project="project", repo="sub/repo".
 func splitHarborRepo(repo string) (project, repoName string) {

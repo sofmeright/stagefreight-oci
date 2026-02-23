@@ -55,6 +55,8 @@ func NewGitLab(registryURL, user, pass string) *GitLabRegistry {
 
 func (g *GitLabRegistry) Provider() string { return "gitlab" }
 
+func (g *GitLabRegistry) UpdateDescription(_ context.Context, _, _, _ string) error { return nil }
+
 func (g *GitLabRegistry) apiURL(path string) string {
 	return fmt.Sprintf("%s/api/v4/projects/%s%s", g.baseURL, url.PathEscape(g.projectID), path)
 }

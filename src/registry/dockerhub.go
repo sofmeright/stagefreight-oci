@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -110,4 +111,41 @@ func (d *DockerHub) DeleteTag(ctx context.Context, repo string, tag string) erro
 		return fmt.Errorf("dockerhub: deleting tag %s/%s: %w", repo, tag, err)
 	}
 	return nil
+}
+
+func (d *DockerHub) UpdateDescription(ctx context.Context, repo, short, full string) error {
+	if err := d.authenticate(ctx); err != nil {
+		return err
+	}
+
+	// Docker Hub limits: 100 chars short, 25000 bytes full
+	short = truncateAtWord(short, 100)
+	if len(full) > 25000 {
+		full = full[:25000]
+	}
+
+	payload := map[string]string{
+		"description":      short,
+		"full_description": full,
+	}
+
+	url := fmt.Sprintf("https://hub.docker.com/v2/repositories/%s/", repo)
+	_, err := d.client.doJSON(ctx, "PATCH", url, payload, nil)
+	if err != nil {
+		return fmt.Errorf("dockerhub: updating description for %s: %w", repo, err)
+	}
+	return nil
+}
+
+// truncateAtWord truncates s at the last word boundary before maxLen.
+func truncateAtWord(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	// Find last space before maxLen
+	truncated := s[:maxLen]
+	if idx := strings.LastIndexByte(truncated, ' '); idx > 0 {
+		return truncated[:idx]
+	}
+	return truncated
 }

@@ -90,6 +90,8 @@ func (g *Gitea) DeleteTag(ctx context.Context, repo string, tag string) error {
 	return nil
 }
 
+func (g *Gitea) UpdateDescription(_ context.Context, _, _, _ string) error { return nil }
+
 // splitGiteaRepo splits "owner/package" into owner and package name.
 func splitGiteaRepo(repo string) (owner, pkg string) {
 	idx := strings.IndexByte(repo, '/')

@@ -23,6 +23,10 @@ type Registry interface {
 
 	// DeleteTag removes a single tag from a repository.
 	DeleteTag(ctx context.Context, repo string, tag string) error
+
+	// UpdateDescription pushes short and full descriptions to the registry.
+	// Returns nil for providers that don't support description APIs.
+	UpdateDescription(ctx context.Context, repo, short, full string) error
 }
 
 // TagInfo describes a single tag in a container registry.
