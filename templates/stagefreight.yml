@@ -3,7 +3,7 @@ spec:
     stagefreight_image:
       description: "StageFreight image to use for the build"
       type: string
-      default: "docker.io/prplanit/stagefreight:latest"
+      default: "docker.io/prplanit/stagefreight:latest-dev"
     dind_image:
       description: "Docker-in-Docker service image"
       type: string

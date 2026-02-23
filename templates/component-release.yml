@@ -5,7 +5,7 @@ spec:
     stagefreight_image:
       description: "StageFreight image to use"
       type: string
-      default: "docker.io/prplanit/stagefreight:latest"
+      default: "docker.io/prplanit/stagefreight:latest-dev"
     # input_section_name- Component Documentation
     # input_section_desc- Controls input documentation generation and README injection.
     readme_file:
