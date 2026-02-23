@@ -16,7 +16,7 @@ docker:
         - "latest"
       branches: ["^main$"]
       git_tags: ["^\\d+\\.\\d+\\.\\d+$"]
-      credentials: DOCKERHUB
+      credentials: DOCKER
 
     # ── Docker Hub: pre-releases (alpha/beta/rc) ────────────────────
     # Version tag only — no rolling tags, no latest.
@@ -26,15 +26,15 @@ docker:
         - "{version}"          # 0.2.0-alpha.1
       branches: ["^main$"]
       git_tags: ["\\d+\\.\\d+\\.\\d+-.+"]
-      credentials: DOCKERHUB
+      credentials: DOCKER
 
-    # ── Quay: dev builds on every commit ────────────────────────────
-    # Ephemeral builds for testing. Retention keeps last 10.
-    #- url: quay.io
-    #  path: prplanit/stagefreight
-    #  tags:
-    #    - "dev-{sha}"         # dev-abc1234
-    #    - "{branch}-{sha}"    # main-abc1234
-    #  branches: [".*"]
-    #  credentials: QUAY
-    #  retention: 10
+    # ── Docker Hub: dev builds on every commit ───────────────────────
+    # Ephemeral builds for testing. No git tag required.
+    # Retention keeps last 10 dev tags.
+    - url: docker.io
+      path: prplanit/stagefreight
+      tags:
+        - "dev-{sha:8}"               # dev-abc12345
+      branches: ["^main$"]
+      credentials: DOCKER
+      retention: 10

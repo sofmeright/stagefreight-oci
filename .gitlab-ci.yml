@@ -3,9 +3,15 @@ stages:
   - security
   - release
 
+# Cancel older pipelines when new commits land on the same branch.
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+
 build-image:
   stage: build
   image: docker.jcr.pcfae.com/prplanit/stagefreight:0.2.0-alpha.1
+  interruptible: true
   services:
     - name: docker.jcr.pcfae.com/docker:27-dind
       alias: docker
@@ -14,6 +20,12 @@ build-image:
     DOCKER_TLS_VERIFY: "1"
     DOCKER_CERT_PATH: "/certs/client"
     DOCKER_TLS_CERTDIR: "/certs"
+  artifacts:
+    paths:
+      - .stagefreight/
+    reports:
+      junit: .stagefreight/reports/lint.xml
+    expire_in: 2 hours
   before_script:
     - docker context create tls-context --docker "host=$DOCKER_HOST,ca=$DOCKER_CERT_PATH/ca.pem,cert=$DOCKER_CERT_PATH/cert.pem,key=$DOCKER_CERT_PATH/key.pem"
     - docker buildx create --name stagefreight-builder --use tls-context
@@ -22,3 +34,47 @@ build-image:
   rules:
     - if: '$CI_COMMIT_TAG'
       when: always
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: always
+
+security-scan:
+  stage: security
+  image: docker.jcr.pcfae.com/prplanit/stagefreight:0.2.0-alpha.1
+  interruptible: true
+  needs: [build-image]
+  services:
+    - name: docker.jcr.pcfae.com/docker:27-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: "tcp://docker:2376"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+    DOCKER_TLS_CERTDIR: "/certs"
+  artifacts:
+    paths:
+      - .stagefreight/security/
+    expire_in: 1 week
+  before_script:
+    - docker context create tls-context --docker "host=$DOCKER_HOST,ca=$DOCKER_CERT_PATH/ca.pem,cert=$DOCKER_CERT_PATH/cert.pem,key=$DOCKER_CERT_PATH/key.pem"
+    - docker buildx create --name security-scanner --use tls-context
+  script:
+    - stagefreight security scan --output .stagefreight/security/
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: always
+  allow_failure: true
+
+create-release:
+  stage: release
+  image: docker.jcr.pcfae.com/prplanit/stagefreight:0.2.0-alpha.1
+  needs:
+    - build-image
+    - job: security-scan
+      optional: true
+  script:
+    - stagefreight release create --registry-links
+    - stagefreight release badge
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: always
+  allow_failure: true

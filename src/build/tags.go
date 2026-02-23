@@ -68,9 +68,9 @@ func ResolveTemplate(tmpl string, v *VersionInfo) string {
 	s = resolveSHA(s, v.SHA)
 	s = resolveRandHex(s)
 	s = resolveRand(s)
-	// {n:W} and {hex:W} counters are resolved at bump/push time by the
-	// tag manager, not here. ResolveTemplate preserves them so the
-	// channel system can interpret the pattern and supply the counter value.
+	// {n:W} and {hex:W} counters are resolved by `stagefreight tag` at
+	// release time, not during image builds. ResolveTemplate preserves
+	// them so the channel system can interpret the pattern.
 
 	// Simple replacements
 	s = strings.ReplaceAll(s, "{version}", v.Version)

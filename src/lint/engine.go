@@ -210,6 +210,15 @@ func (e *Engine) CollectFiles() ([]FileInfo, error) {
 	return files, err
 }
 
+// ModuleNames returns the names of all active modules in this engine.
+func (e *Engine) ModuleNames() []string {
+	names := make([]string, len(e.Modules))
+	for i, m := range e.Modules {
+		names[i] = m.Name()
+	}
+	return names
+}
+
 func (e *Engine) isExcluded(path string) bool {
 	for _, pattern := range e.Config.Exclude {
 		if matched, _ := filepath.Match(pattern, path); matched {

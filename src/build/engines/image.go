@@ -9,6 +9,7 @@ import (
 
 	"github.com/sofmeright/stagefreight/src/build"
 	"github.com/sofmeright/stagefreight/src/config"
+	"github.com/sofmeright/stagefreight/src/registry"
 )
 
 func init() {
@@ -73,7 +74,15 @@ func (e *imageEngine) Plan(ctx context.Context, cfgRaw interface{}, det *build.D
 	var registries []build.RegistryTarget
 
 	if len(cfg.Registries) > 0 {
-		for _, reg := range cfg.Registries {
+		for i, reg := range cfg.Registries {
+			// Validate registry config before resolving templates
+			if errs := registry.ValidateRegistryConfig(
+				reg.URL, reg.Path, reg.Tags, reg.Credentials, reg.Provider,
+				reg.Branches, reg.GitTags, reg.Retention,
+			); len(errs) > 0 {
+				return nil, fmt.Errorf("registry[%d] (%s/%s): %v", i, reg.URL, reg.Path, errs)
+			}
+
 			if !registryAllowed(reg, currentBranch, currentGitTag) {
 				continue
 			}
@@ -89,17 +98,32 @@ func (e *imageEngine) Plan(ctx context.Context, cfgRaw interface{}, det *build.D
 				provider = build.DetectProvider(resolvedURL)
 			}
 
+			// Validate resolved tags conform to OCI spec
+			for _, t := range resolvedTags {
+				if err := registry.ValidateTag(t); err != nil {
+					return nil, fmt.Errorf("registry[%d] (%s/%s): resolved tag: %w", i, reg.URL, reg.Path, err)
+				}
+			}
+
 			target := build.RegistryTarget{
 				URL:         resolvedURL,
 				Path:        resolvedPath,
 				Tags:        resolvedTags,
 				Credentials: reg.Credentials,
 				Provider:    provider,
+				Retention:   reg.Retention,
+				TagPatterns: reg.Tags, // preserve unresolved templates for pattern matching
 			}
 			registries = append(registries, target)
 
 			for _, t := range resolvedTags {
-				ref := fmt.Sprintf("%s/%s:%s", resolvedURL, resolvedPath, t)
+				var ref string
+				if provider == "local" {
+					// Local daemon: no registry URL prefix
+					ref = fmt.Sprintf("%s:%s", resolvedPath, t)
+				} else {
+					ref = fmt.Sprintf("%s/%s:%s", resolvedURL, resolvedPath, t)
+				}
 				tags = append(tags, ref)
 			}
 		}

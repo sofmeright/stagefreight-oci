@@ -107,6 +107,32 @@ func (bx *Buildx) buildArgs(step BuildStep) []string {
 	return args
 }
 
+// PushTags pushes already-loaded local images to their remote registries.
+// Used in single-platform load-then-push strategy where buildx builds with
+// --load first, then we push each remote tag explicitly.
+func (bx *Buildx) PushTags(ctx context.Context, tags []string) error {
+	for _, tag := range tags {
+		if bx.Verbose {
+			fmt.Fprintf(bx.Stderr, "exec: docker push %s\n", tag)
+		}
+
+		cmd := exec.CommandContext(ctx, "docker", "push", tag)
+		cmd.Stdout = bx.Stdout
+		cmd.Stderr = bx.Stderr
+
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("docker push %s: %w", tag, err)
+		}
+	}
+	return nil
+}
+
+// IsMultiPlatform returns true if the step targets more than one platform.
+// Multi-platform builds cannot use --load (buildx limitation).
+func IsMultiPlatform(step BuildStep) bool {
+	return len(step.Platforms) > 1
+}
+
 // Login authenticates to registries that have a credentials label configured.
 // The Credentials field on each RegistryTarget is a user-chosen env var prefix:
 //
@@ -117,6 +143,9 @@ func (bx *Buildx) buildArgs(step BuildStep) []string {
 // If credentials are configured but the env vars are missing, Login returns an error.
 func (bx *Buildx) Login(ctx context.Context, registries []RegistryTarget) error {
 	for _, reg := range registries {
+		if reg.Provider == "local" {
+			continue
+		}
 		if reg.Credentials == "" {
 			if bx.Verbose {
 				fmt.Fprintf(bx.Stderr, "skip login: no credentials configured for %s\n", reg.URL)

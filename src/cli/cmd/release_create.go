@@ -13,14 +13,15 @@ import (
 )
 
 var (
-	rcTag         string
-	rcName        string
-	rcNotesFile   string
-	rcDraft       bool
-	rcPrerelease  bool
-	rcAssets      []string
-	rcRegistryLinks bool
-	rcSkipSync    bool
+	rcTag             string
+	rcName            string
+	rcNotesFile       string
+	rcSecuritySummary string
+	rcDraft           bool
+	rcPrerelease      bool
+	rcAssets          []string
+	rcRegistryLinks   bool
+	rcSkipSync        bool
 )
 
 var releaseCreateCmd = &cobra.Command{
@@ -39,6 +40,7 @@ func init() {
 	releaseCreateCmd.Flags().StringVar(&rcTag, "tag", "", "release tag (default: detected from git)")
 	releaseCreateCmd.Flags().StringVar(&rcName, "name", "", "release name (default: tag)")
 	releaseCreateCmd.Flags().StringVar(&rcNotesFile, "notes", "", "path to release notes markdown file")
+	releaseCreateCmd.Flags().StringVar(&rcSecuritySummary, "security-summary", "", "path to security output directory (reads summary.md)")
 	releaseCreateCmd.Flags().BoolVar(&rcDraft, "draft", false, "create as draft release")
 	releaseCreateCmd.Flags().BoolVar(&rcPrerelease, "prerelease", false, "mark as prerelease")
 	releaseCreateCmd.Flags().StringSliceVar(&rcAssets, "asset", nil, "files to attach to release (repeatable)")
@@ -71,6 +73,21 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 		name = tag
 	}
 
+	// Load security summary if provided
+	var secSummary string
+	if rcSecuritySummary != "" {
+		summaryPath := rcSecuritySummary + "/summary.md"
+		data, err := os.ReadFile(summaryPath)
+		if err != nil {
+			// Not fatal — security scan may have been skipped
+			if verbose {
+				fmt.Fprintf(os.Stderr, "  note: no security summary at %s: %v\n", summaryPath, err)
+			}
+		} else {
+			secSummary = string(data)
+		}
+	}
+
 	// Generate or load release notes
 	var notes string
 	if rcNotesFile != "" {
@@ -80,7 +97,7 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 		}
 		notes = string(data)
 	} else {
-		notes, err = release.GenerateNotes(rootDir, "", tag, "")
+		notes, err = release.GenerateNotes(rootDir, "", tag, secSummary)
 		if err != nil {
 			return fmt.Errorf("generating notes: %w", err)
 		}
@@ -334,9 +351,9 @@ func newForgeClient(provider forge.Provider, remoteURL string) (forge.Forge, err
 	case forge.GitLab:
 		return forge.NewGitLab(baseURL), nil
 	case forge.GitHub:
-		return nil, fmt.Errorf("GitHub forge not yet implemented")
+		return forge.NewGitHub(baseURL), nil
 	case forge.Gitea:
-		return nil, fmt.Errorf("Gitea forge not yet implemented")
+		return forge.NewGitea(baseURL), nil
 	default:
 		return nil, fmt.Errorf("unknown forge provider: %s", provider)
 	}
@@ -360,9 +377,33 @@ func newSyncForgeClient(target config.SyncTarget) (forge.Forge, error) {
 		}
 		return gl, nil
 	case "github":
-		return nil, fmt.Errorf("GitHub forge not yet implemented")
+		gh := forge.NewGitHub(target.URL)
+		if target.Credentials != "" {
+			token := os.Getenv(target.Credentials + "_TOKEN")
+			if token == "" {
+				return nil, fmt.Errorf("sync target %s: %s_TOKEN env var not set", target.Name, target.Credentials)
+			}
+			gh.Token = token
+		}
+		if target.ProjectID != "" {
+			gh.Owner = ownerFromPath(target.ProjectID)
+			gh.Repo = repoFromPath(target.ProjectID)
+		}
+		return gh, nil
 	case "gitea":
-		return nil, fmt.Errorf("Gitea forge not yet implemented")
+		gt := forge.NewGitea(target.URL)
+		if target.Credentials != "" {
+			token := os.Getenv(target.Credentials + "_TOKEN")
+			if token == "" {
+				return nil, fmt.Errorf("sync target %s: %s_TOKEN env var not set", target.Name, target.Credentials)
+			}
+			gt.Token = token
+		}
+		if target.ProjectID != "" {
+			gt.Owner = ownerFromPath(target.ProjectID)
+			gt.Repo = repoFromPath(target.ProjectID)
+		}
+		return gt, nil
 	default:
 		return nil, fmt.Errorf("unknown sync provider: %s", target.Provider)
 	}

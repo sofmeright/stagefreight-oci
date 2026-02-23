@@ -1,5 +1,7 @@
 package build
 
+import "github.com/sofmeright/stagefreight/src/config"
+
 // OutputMode describes what the build produces.
 type OutputMode string
 
@@ -42,6 +44,8 @@ type RegistryTarget struct {
 	URL         string
 	Path        string
 	Tags        []string
-	Credentials string // env var prefix for auth (e.g., "DOCKERHUB" → DOCKERHUB_USER/DOCKERHUB_PASS)
-	Provider    string // registry vendor: dockerhub, ghcr, gitlab, jfrog, harbor, quay, generic
+	Credentials string                 // env var prefix for auth (e.g., "DOCKERHUB" → DOCKERHUB_USER/DOCKERHUB_PASS)
+	Provider    string                 // registry vendor: dockerhub, ghcr, gitlab, jfrog, harbor, quay, gitea, generic
+	Retention   config.RetentionPolicy // restic-style retention policy
+	TagPatterns []string               // original unresolved tag templates for pattern matching during retention
 }
