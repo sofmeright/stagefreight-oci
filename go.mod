@@ -8,6 +8,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/spf13/cobra v1.10.2
 	github.com/zricethezav/gitleaks/v8 v8.24.3
+	golang.org/x/image v0.24.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

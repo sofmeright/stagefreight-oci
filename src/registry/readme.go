@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sofmeright/stagefreight/src/config"
+	"github.com/sofmeright/stagefreight/src/narrator"
 )
 
 // ReadmeContent holds the processed README ready for pushing to registries.
@@ -56,6 +57,18 @@ func PrepareReadme(cfg config.DockerReadmeConfig, rootDir string) (*ReadmeConten
 	// 3. Rewrite relative links
 	if cfg.LinkBase != "" {
 		content = rewriteRelativeLinks(content, cfg.LinkBase)
+	}
+
+	// 3.5. Narrator: compose badges into managed sections
+	if len(cfg.Badges) > 0 {
+		linkBase := strings.TrimRight(cfg.LinkBase, "/")
+		rawBase := cfg.RawBase
+		if rawBase == "" {
+			rawBase = DeriveRawBase(linkBase)
+		}
+		rawBase = strings.TrimRight(rawBase, "/")
+
+		content = composeBadgeSections(content, cfg.Badges, linkBase, rawBase)
 	}
 
 	// 4. Apply regex transforms
@@ -123,6 +136,105 @@ func rewriteRelativeLinks(content, base string) string {
 
 		return parts[1] + base + "/" + href + parts[3]
 	})
+}
+
+// DeriveRawBase auto-derives a raw file URL base from a link_base URL.
+// Supports GitHub, GitLab, and Gitea URL patterns.
+func DeriveRawBase(linkBase string) string {
+	if linkBase == "" {
+		return ""
+	}
+
+	// GitHub: github.com/{owner}/{repo}/blob/{branch} → raw.githubusercontent.com/{owner}/{repo}/{branch}
+	if strings.Contains(linkBase, "github.com/") {
+		s := strings.Replace(linkBase, "github.com/", "raw.githubusercontent.com/", 1)
+		s = strings.Replace(s, "/blob/", "/", 1)
+		return s
+	}
+
+	// GitLab: gitlab.com/{owner}/{repo}/-/blob/{branch} → gitlab.com/{owner}/{repo}/-/raw/{branch}
+	if strings.Contains(linkBase, "/-/blob/") {
+		return strings.Replace(linkBase, "/-/blob/", "/-/raw/", 1)
+	}
+
+	// Gitea: {host}/{owner}/{repo}/src/branch/{branch} → {host}/{owner}/{repo}/raw/branch/{branch}
+	if strings.Contains(linkBase, "/src/branch/") {
+		return strings.Replace(linkBase, "/src/branch/", "/raw/branch/", 1)
+	}
+
+	return ""
+}
+
+// composeBadgeSections groups badge entries by section, composes each group
+// through the narrator, and injects the result into the corresponding
+// <!-- sf:<section> --> markers. Single code path — no hand-rolled markdown.
+func composeBadgeSections(content string, badges []config.BadgeEntry, linkBase, rawBase string) string {
+	// Group badges by target section (default: "badges").
+	groups := make(map[string][]narrator.Module)
+	order := []string{} // preserve first-seen order
+	for _, b := range badges {
+		section := b.Section
+		if section == "" {
+			section = "badges"
+		}
+		mod := resolveBadgeModule(b, linkBase, rawBase)
+		if mod == nil {
+			continue
+		}
+		if _, seen := groups[section]; !seen {
+			order = append(order, section)
+		}
+		groups[section] = append(groups[section], mod)
+	}
+
+	// Compose and inject each section.
+	for _, section := range order {
+		modules := groups[section]
+		// All badges in a section on one row (future: config-driven row breaks).
+		composed := narrator.Compose(modules)
+		if composed == "" {
+			continue
+		}
+
+		updated, found := ReplaceSection(content, section, composed)
+		if found {
+			content = updated
+		} else {
+			// No markers yet — insert wrapped section at the top.
+			content = WrapSection(section, composed) + "\n\n" + content
+		}
+	}
+
+	return content
+}
+
+// resolveBadgeModule resolves a BadgeEntry's URLs and returns a narrator Module.
+// Returns nil if the entry can't be resolved (missing file and URL).
+func resolveBadgeModule(b config.BadgeEntry, linkBase, rawBase string) narrator.Module {
+	var imgURL string
+	if b.URL != "" {
+		imgURL = b.URL
+	} else if b.File != "" && rawBase != "" {
+		imgURL = rawBase + "/" + strings.TrimPrefix(b.File, "./")
+	} else {
+		return nil
+	}
+
+	link := b.Link
+	if link != "" && !isAbsoluteURL(link) && linkBase != "" {
+		link = linkBase + "/" + strings.TrimPrefix(link, "./")
+	}
+
+	return narrator.BadgeModule{
+		Alt:    b.Alt,
+		ImgURL: imgURL,
+		Link:   link,
+	}
+}
+
+// isAbsoluteURL checks if a URL is absolute (has scheme or starts with /).
+func isAbsoluteURL(u string) bool {
+	return strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "/")
 }
 
 // extractFirstParagraph returns the first prose paragraph from markdown content.

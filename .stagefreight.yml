@@ -1,6 +1,34 @@
 version: 1
 
+badges:
+  font: dejavu-sans
+  font_size: 11
+  items:
+    - name: release
+      label: release
+      color: auto
+      output: .badges/release.svg
+    - name: license
+      label: license
+      value: "AGPL-3.0"
+      color: "#007ec6"
+      output: .badges/license.svg
+
 docker:
+  readme:
+    description: "Declarative CI/CD CLI — detect, build, scan, and release container images from one manifest"
+    link_base: "https://github.com/sofmeright/stagefreight/blob/main"
+    badges:
+      - alt: release
+        file: ".badges/release.svg"
+        link: "https://github.com/sofmeright/stagefreight/releases"
+      - alt: license
+        file: ".badges/license.svg"
+        link: LICENSE
+      - alt: pulls
+        url: "https://img.shields.io/docker/pulls/prplanit/stagefreight"
+        link: "https://hub.docker.com/r/prplanit/stagefreight"
+
   platforms: [linux/amd64]
 
   registries:

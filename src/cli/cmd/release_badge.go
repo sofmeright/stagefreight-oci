@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
+	"github.com/sofmeright/stagefreight/src/badge"
 	"github.com/sofmeright/stagefreight/src/build"
+	"github.com/sofmeright/stagefreight/src/fonts"
 	"github.com/sofmeright/stagefreight/src/forge"
-	rl "github.com/sofmeright/stagefreight/src/release"
 )
 
 var (
@@ -62,11 +64,20 @@ func runReleaseBadge(cmd *cobra.Command, args []string) error {
 	}
 
 	// Generate SVG
-	svg := rl.BadgeSVG(version, rbStatus)
+	metrics, err := badge.LoadBuiltinFont(fonts.DefaultFont, 11)
+	if err != nil {
+		return fmt.Errorf("loading badge font: %w", err)
+	}
+	eng := badge.New(metrics)
+	svg := eng.Generate(badge.Badge{
+		Label: "release",
+		Value: version,
+		Color: badge.StatusColor(rbStatus),
+	})
 
 	// Write locally if requested
 	if rbLocal {
-		if err := os.MkdirAll(dirOf(badgePath), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(badgePath), 0o755); err != nil {
 			return fmt.Errorf("creating badge directory: %w", err)
 		}
 		if err := os.WriteFile(badgePath, []byte(svg), 0o644); err != nil {
@@ -140,12 +151,3 @@ func runReleaseBadge(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// dirOf returns the directory portion of a file path.
-func dirOf(path string) string {
-	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] == '/' {
-			return path[:i]
-		}
-	}
-	return "."
-}

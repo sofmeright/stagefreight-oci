@@ -1,4 +1,6 @@
-![Latest Release](assets/badge-release-status.svg)
+[![release](https://img.shields.io/docker/v/prplanit/stagefreight?sort=semver&label=release)](https://hub.docker.com/r/prplanit/stagefreight)
+[![pulls](https://img.shields.io/docker/pulls/prplanit/stagefreight)](https://hub.docker.com/r/prplanit/stagefreight)
+[![license](https://img.shields.io/github/license/sofmeright/stagefreight)](LICENSE)
 
 # StageFreight
 

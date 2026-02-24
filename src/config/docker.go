@@ -18,10 +18,22 @@ type DockerReadmeConfig struct {
 	File        string          `yaml:"file"`
 	Description string          `yaml:"description"`
 	LinkBase    string          `yaml:"link_base"`
+	RawBase     string          `yaml:"raw_base"`
+	Badges      []BadgeEntry    `yaml:"badges"`
 	Markers     *bool           `yaml:"markers"`
 	StartMarker string          `yaml:"start_marker"`
 	EndMarker   string          `yaml:"end_marker"`
 	Transforms  []TransformRule `yaml:"transforms"`
+}
+
+// BadgeEntry defines a single badge for narrator-driven injection into synced READMEs.
+// Exactly one of File or URL must be set per entry.
+type BadgeEntry struct {
+	Alt     string `yaml:"alt"`     // image alt text
+	File    string `yaml:"file"`    // relative path to committed SVG (resolved via raw_base)
+	URL     string `yaml:"url"`     // absolute image URL (shields.io, etc.)
+	Link    string `yaml:"link"`    // click target (absolute URL or relative path resolved via link_base)
+	Section string `yaml:"section"` // target section name (default: "badges")
 }
 
 // TransformRule defines a regex find/replace applied to README content.
@@ -37,7 +49,7 @@ func (r DockerReadmeConfig) IsActive() bool {
 	}
 	return r.File != "" || r.Description != "" || r.LinkBase != "" ||
 		r.Markers != nil || r.StartMarker != "" || r.EndMarker != "" ||
-		len(r.Transforms) > 0
+		len(r.Transforms) > 0 || len(r.Badges) > 0
 }
 
 // RegistryConfig defines a registry push target.

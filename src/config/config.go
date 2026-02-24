@@ -17,6 +17,8 @@ type Config struct {
 	Security  SecurityConfig  `yaml:"security"`
 	Release   ReleaseConfig   `yaml:"release"`
 	Component ComponentConfig `yaml:"component"`
+	Badges    BadgesConfig    `yaml:"badges"`
+	Narrator  NarratorConfig  `yaml:"narrator"`
 }
 
 // Load reads configuration from a YAML file.
@@ -49,5 +51,7 @@ func defaults() *Config {
 		Security:  DefaultSecurityConfig(),
 		Release:   DefaultReleaseConfig(),
 		Component: DefaultComponentConfig(),
+		Badges:    DefaultBadgesConfig(),
+		Narrator:  DefaultNarratorConfig(),
 	}
 }
