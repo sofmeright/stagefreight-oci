@@ -3,6 +3,7 @@ package modules
 import (
 	"context"
 	"os"
+	"sync"
 
 	"github.com/zricethezav/gitleaks/v8/detect"
 	"github.com/sofmeright/stagefreight/src/lint"
@@ -13,7 +14,9 @@ func init() {
 }
 
 type secretsModule struct {
+	once     sync.Once
 	detector *detect.Detector
+	initErr  error
 }
 
 func (m *secretsModule) Name() string        { return "secrets" }
@@ -21,13 +24,11 @@ func (m *secretsModule) DefaultEnabled() bool { return true }
 func (m *secretsModule) AutoDetect() []string { return nil }
 
 func (m *secretsModule) Check(ctx context.Context, file lint.FileInfo) ([]lint.Finding, error) {
-	// Lazy-init the detector (thread-safe: each goroutine gets its own module instance)
-	if m.detector == nil {
-		d, err := detect.NewDetectorDefaultConfig()
-		if err != nil {
-			return nil, err
-		}
-		m.detector = d
+	m.once.Do(func() {
+		m.detector, m.initErr = detect.NewDetectorDefaultConfig()
+	})
+	if m.initErr != nil {
+		return nil, m.initErr
 	}
 
 	data, err := os.ReadFile(file.AbsPath)
