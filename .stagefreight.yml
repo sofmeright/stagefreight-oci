@@ -10,7 +10,7 @@ badges:
       output: .badges/release.svg
     - name: license
       label: license
-      value: "AGPL-3.0"
+      value: "AGPL-3.0+"
       color: "#007ec6"
       output: .badges/license.svg
 
