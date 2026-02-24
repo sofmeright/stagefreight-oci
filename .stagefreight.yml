@@ -6,7 +6,7 @@ badges:
   items:
     - name: release
       label: release
-      color: auto
+      color: "#74ecbe"
       output: .badges/release.svg
     - name: build
       label: build
