@@ -76,10 +76,16 @@ generate-docs:
   image: docker.jcr.pcfae.com/prplanit/stagefreight:latest-dev
   variables:
     GIT_DEPTH: 0
+    BUILD_STATUS: "passing"
+    BUILD_DATE: "$CI_COMMIT_TIMESTAMP"
   script:
+    - stagefreight badge generate
+    - stagefreight docker readme
     - stagefreight component docs --readme README.md --commit
   rules:
     - if: '$CI_COMMIT_TAG'
+      when: always
+    - if: '$CI_COMMIT_BRANCH == "main"'
       when: always
   allow_failure: true
 
