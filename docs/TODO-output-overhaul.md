@@ -71,17 +71,13 @@ Requires rootDir, called from `ResolveTemplateWithDir` when rootDir is available
 `{project.description}` sourced via `SetProjectDescription()` (called from `docker_build.go`
 with `docker.readme.description` config value).
 
-### Docker/Registry (API tier)
-```
-{docker.pulls}            → "1.2k" (formatted)
-{docker.pulls:raw}        → "1247" (raw number)
-{docker.stars}            → star count
-{docker.size}             → "72.4 MB" (compressed image size)
-{docker.size:raw}         → "75890432" (bytes)
-{docker.latest}           → latest tag digest short hash
-```
-
-Resolves against the first `docker.io` registry in config.
+### Docker/Registry (API tier) — DONE
+`src/gitver/docker_hub.go` — `FetchDockerHubInfo(ns, repo)`, `ResolveDockerTemplates()`,
+`formatCount()`, `formatBytes()`, `shortDigest()`.
+Lazy: only fetches from Docker Hub API if any badge value contains `{docker.`.
+Cached per run: one fetch, reused across all badges.
+Wired into both `runBadgeSection()` (build pipeline) and `generateConfigBadges()` (CLI).
+Uses first `docker.io` registry from config for namespace/repo.
 
 ### Component (Config + GitLab API tier)
 ```
@@ -91,14 +87,9 @@ Resolves against the first `docker.io` registry in config.
 {component.catalog_status} → "published" / "draft"
 ```
 
-### API tier rules
-- Lazy — only resolved if the template is actually referenced
-- Cached per run — one API call per provider, not per badge
-- Graceful failure — badge shows `?` or raw template if API unreachable
+**Status: TODO** — needs GitLab API client
 
 **Files:**
-- `src/gitver/providers.go` (NEW) — API provider interface
-- `src/gitver/docker_provider.go` (NEW) — Docker Hub API client
 - `src/gitver/gitlab_provider.go` (NEW) — GitLab catalog API client
 
 ---
@@ -313,17 +304,17 @@ area carries live pipeline context.
 | `{project.license}` | Filesystem | SPDX identifier from LICENSE |
 | `{project.description}` | Config | From SetProjectDescription |
 | `{project.language}` | Filesystem | Auto-detected from lockfiles |
+| `{docker.pulls}` | API | Pull count (formatted, e.g. "1.2k") |
+| `{docker.pulls:raw}` | API | Pull count (raw number) |
+| `{docker.stars}` | API | Star count |
+| `{docker.size}` | API | Image size (formatted, e.g. "72.4 MB") |
+| `{docker.size:raw}` | API | Image size (bytes) |
+| `{docker.latest}` | API | Latest tag digest (12 chars) |
 
 ### TODO
 
 | Template | Tier | Description |
 |----------|------|-------------|
-| `{docker.pulls}` | API | Pull count (formatted) |
-| `{docker.pulls:raw}` | API | Pull count (raw) |
-| `{docker.stars}` | API | Star count |
-| `{docker.size}` | API | Image size (formatted) |
-| `{docker.size:raw}` | API | Image size (bytes) |
-| `{docker.latest}` | API | Latest tag digest |
 | `{component.version}` | Git | Shorthand for `{version:component}` |
 | `{component.name}` | Config | Component name |
 | `{component.catalog_url}` | API | GitLab catalog URL |
@@ -344,6 +335,7 @@ area carries live pipeline context.
 9. **`{date:FORMAT}` + `{commit.date}`** — DONE (`resolveDateFormat`, `resolveCommitDate`, `{datetime}` bug fix)
 10. **Project metadata templates** — DONE (`{project.*}` in `project.go` + `resolveProjectMeta`)
 11. **Narrator CLI** — DONE (`narrator compose` ad-hoc + `narrator run` config-driven)
-12. **API templates** — `{docker.*}`, `{component.*}` (needs provider interface + HTTP clients)
-13. **Build streaming** — parse buildx output for layer-by-layer progress (hardest piece)
-14. **Banner** — chafa rendering + clapperboard text splicing
+12. **Docker Hub API templates** — DONE (`{docker.*}` in `docker_hub.go` + lazy fetch)
+13. **Component templates** — `{component.*}` (needs GitLab API client)
+14. **Build streaming** — parse buildx output for layer-by-layer progress (hardest piece)
+15. **Banner** — chafa rendering + clapperboard text splicing

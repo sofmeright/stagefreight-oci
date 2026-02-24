@@ -669,6 +669,18 @@ func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Dura
 	// Detect version for template resolution
 	vi, _ := build.DetectVersion(rootDir)
 
+	// Lazy Docker Hub info — only fetch if any badge value uses {docker.*}
+	var dockerInfo *gitver.DockerHubInfo
+	for _, item := range bcfg.Items {
+		if strings.Contains(item.Value, "{docker.") {
+			ns, repo := dockerHubFromConfig()
+			if ns != "" && repo != "" {
+				dockerInfo, _ = gitver.FetchDockerHubInfo(ns, repo)
+			}
+			break
+		}
+	}
+
 	var generated int
 	for _, item := range bcfg.Items {
 		// Per-item engine if font is overridden
@@ -686,6 +698,7 @@ func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Dura
 		if vi != nil && value != "" {
 			value = gitver.ResolveTemplateWithDir(value, vi, rootDir)
 		}
+		value = gitver.ResolveDockerTemplates(value, dockerInfo)
 
 		// Resolve color
 		badgeColor := item.Color
@@ -791,4 +804,17 @@ func runReadmeSyncSection(ctx context.Context, w io.Writer, _ bool, color bool, 
 	}
 
 	return summary, elapsed
+}
+
+// dockerHubFromConfig returns the namespace and repo for the first docker.io registry.
+func dockerHubFromConfig() (string, string) {
+	for _, reg := range cfg.Docker.Registries {
+		if reg.URL == "docker.io" && reg.Path != "" {
+			parts := strings.SplitN(reg.Path, "/", 2)
+			if len(parts) == 2 {
+				return parts[0], parts[1]
+			}
+		}
+	}
+	return "", ""
 }

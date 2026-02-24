@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/sofmeright/stagefreight/src/badge"
@@ -139,6 +140,23 @@ func generateConfigBadges(eng *badge.Engine, names []string) error {
 		fmt.Fprintf(os.Stderr, "  warning: version detection failed: %v\n", err)
 	}
 
+	// Inject project description from config
+	if cfg.Docker.Readme.Description != "" {
+		gitver.SetProjectDescription(cfg.Docker.Readme.Description)
+	}
+
+	// Lazy Docker Hub info — only fetch if any badge value uses {docker.*}
+	var dockerInfo *gitver.DockerHubInfo
+	for _, item := range items {
+		if strings.Contains(item.Value, "{docker.") {
+			ns, repo := dockerHubFromConfig()
+			if ns != "" && repo != "" {
+				dockerInfo, _ = gitver.FetchDockerHubInfo(ns, repo)
+			}
+			break
+		}
+	}
+
 	for _, item := range items {
 		// Resolve per-item engine if font is overridden.
 		itemEng := eng
@@ -153,8 +171,9 @@ func generateConfigBadges(eng *badge.Engine, names []string) error {
 		// Resolve value templates
 		value := item.Value
 		if versionInfo != nil && value != "" {
-			value = gitver.ResolveTemplate(value, versionInfo)
+			value = gitver.ResolveTemplateWithDir(value, versionInfo, rootDir)
 		}
+		value = gitver.ResolveDockerTemplates(value, dockerInfo)
 
 		// Resolve color
 		color := item.Color
