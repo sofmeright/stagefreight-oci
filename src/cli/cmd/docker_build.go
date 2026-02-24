@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/sofmeright/stagefreight/src/build"
 	_ "github.com/sofmeright/stagefreight/src/build/engines"
+	"github.com/sofmeright/stagefreight/src/config"
 	"github.com/sofmeright/stagefreight/src/lint"
 	"github.com/sofmeright/stagefreight/src/lint/modules"
 	"github.com/sofmeright/stagefreight/src/output"
@@ -60,21 +61,25 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 
 	ctx := context.Background()
 	ci := output.IsCI()
+	color := output.UseColor()
 	w := os.Stdout
+	pipelineStart := time.Now()
 
-	// CI header with pipeline context
-	output.CIHeader(w)
+	// Pipeline context block
+	output.ContextBlock(w, buildContextKV())
 
 	// --- Pre-build lint gate ---
+	var lintSummary string
 	if !dbSkipLint {
 		output.SectionStart(w, "sf_lint", "Lint")
-		lintErr := runPreBuildLint(ctx, rootDir, ci)
+		var lintErr error
+		lintSummary, lintErr = runPreBuildLint(ctx, rootDir, ci, color, w)
 		output.SectionEnd(w, "sf_lint")
 		if lintErr != nil {
 			return lintErr
 		}
-	} else if ci {
-		output.PhaseResult(w, "lint", "skipped", "--skip-lint", 0)
+	} else {
+		lintSummary = "--skip-lint"
 	}
 
 	// --- Detect ---
@@ -94,15 +99,21 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 	}
 	detectElapsed := time.Since(detectStart)
 
-	if verbose {
-		fmt.Fprintf(os.Stderr, "detected: %d Dockerfiles, language=%s\n",
-			len(det.Dockerfiles), det.Language)
+	detectSec := output.NewSection(w, "Detect", detectElapsed, color)
+	for _, df := range det.Dockerfiles {
+		detectSec.Row("%-16s→ %s", "Dockerfile", df)
 	}
-
-	output.PhaseResult(w, "detect", "success",
-		fmt.Sprintf("%d Dockerfile(s), %s", len(det.Dockerfiles), det.Language),
-		detectElapsed)
+	detectSec.Row("%-16s→ %s (auto-detected)", "language", det.Language)
+	detectSec.Row("%-16s→ %s", "context", ".")
+	if dbTarget != "" {
+		detectSec.Row("%-16s→ %s", "target", dbTarget)
+	} else {
+		detectSec.Row("%-16s→ %s", "target", "(default)")
+	}
+	detectSec.Close()
 	output.SectionEnd(w, "sf_detect")
+
+	detectSummary := fmt.Sprintf("%d Dockerfile(s), %s", len(det.Dockerfiles), det.Language)
 
 	// --- Plan ---
 	output.SectionStartCollapsed(w, "sf_plan", "Plan")
@@ -167,23 +178,31 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 	planElapsed := time.Since(planStart)
 
 	// Plan summary
-	var planParts []string
-	planParts = append(planParts, formatPlatforms(plan.Steps))
 	tagCount := 0
+	var tagNames []string
 	for _, s := range plan.Steps {
 		tagCount += len(s.Tags)
+		tagNames = append(tagNames, s.Tags...)
 	}
 	step0 := plan.Steps[0]
+	var strategy string
 	switch {
 	case step0.Push:
-		planParts = append(planParts, fmt.Sprintf("%d tag(s), multi-platform push", tagCount))
+		strategy = "multi-platform push"
 	case step0.Load && hasRemoteRegistries(step0.Registries):
-		planParts = append(planParts, fmt.Sprintf("%d tag(s), load+push", tagCount))
+		strategy = "load + push"
 	default:
-		planParts = append(planParts, fmt.Sprintf("%d tag(s), local", tagCount))
+		strategy = "local"
 	}
-	output.PhaseResult(w, "plan", "success", strings.Join(planParts, ", "), planElapsed)
+
+	planSec := output.NewSection(w, "Plan", planElapsed, color)
+	planSec.Row("%-16s%s", "platforms", formatPlatforms(plan.Steps))
+	planSec.Row("%-16s%s", "tags", strings.Join(tagNames, ", "))
+	planSec.Row("%-16s%s", "strategy", strategy)
+	planSec.Close()
 	output.SectionEnd(w, "sf_plan")
+
+	planSummary := fmt.Sprintf("%s, %d tag(s), %s", formatPlatforms(plan.Steps), tagCount, strategy)
 
 	// --- Dry run ---
 	if dbDryRun {
@@ -237,94 +256,142 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 					fmt.Fprint(w, buf.String())
 				}
 			}
-			output.PhaseResult(w, "build", "failed", err.Error(), buildElapsed)
 			output.SectionEnd(w, "sf_build")
 			return err
 		}
 	}
 	buildElapsed := time.Since(buildStart)
 
-	// Build summary
-	var buildDetail []string
-	buildDetail = append(buildDetail, formatPlatforms(plan.Steps))
+	// Build section output
+	buildSec := output.NewSection(w, "Build", buildElapsed, color)
+	var buildImageCount int
+	var buildSummaryParts []string
 	for _, sr := range result.Steps {
 		for _, img := range sr.Images {
-			parts := strings.Split(img, "/")
-			buildDetail = append(buildDetail, parts[len(parts)-1])
-			break
+			buildSec.Row("result  %-40s", img)
+			buildImageCount++
 		}
 	}
-	output.PhaseResult(w, "build", "success", strings.Join(buildDetail, ", "), buildElapsed)
+	buildSec.Close()
+
+	buildSummaryParts = append(buildSummaryParts, fmt.Sprintf("%d image(s)", buildImageCount))
+	buildSummary := strings.Join(buildSummaryParts, ", ")
 	output.SectionEnd(w, "sf_build")
 
 	// --- Push (single-platform load-then-push) ---
 	// For single-platform builds that loaded into the daemon, push remote tags now.
 	remoteTags := collectRemoteTags(plan)
+	var pushSummary string
+	var pushElapsed time.Duration
 	if len(remoteTags) > 0 {
 		output.SectionStart(w, "sf_push", "Push")
 		pushStart := time.Now()
 
 		if err := bx.PushTags(ctx, remoteTags); err != nil {
-			pushElapsed := time.Since(pushStart)
-			output.PhaseResult(w, "push", "failed", err.Error(), pushElapsed)
+			pushElapsed = time.Since(pushStart)
 			output.SectionEnd(w, "sf_push")
 			return err
 		}
 
-		pushElapsed := time.Since(pushStart)
-		output.PhaseResult(w, "push", "success",
-			fmt.Sprintf("%d tag(s) pushed", len(remoteTags)), pushElapsed)
+		pushElapsed = time.Since(pushStart)
+		pushSec := output.NewSection(w, "Push", pushElapsed, color)
+		for _, tag := range remoteTags {
+			pushSec.Row("%-50s %s", tag, output.StatusIcon("success", color))
+		}
+		pushSec.Close()
+
+		// Count unique registries
+		regSet := make(map[string]bool)
+		for _, tag := range remoteTags {
+			parts := strings.SplitN(tag, "/", 2)
+			if len(parts) > 0 {
+				regSet[parts[0]] = true
+			}
+		}
+		pushSummary = fmt.Sprintf("%d tag(s) → %d registry", len(remoteTags), len(regSet))
 		output.SectionEnd(w, "sf_push")
 	}
 
 	// --- README Sync ---
+	var readmeSummary string
 	if cfg.Docker.Readme.IsActive() && !dbLocal {
-		runReadmeSync(ctx, w, ci, cfg.Docker.Readme, cfg.Docker.Registries, rootDir)
+		readmeSummary, _ = runReadmeSyncSection(ctx, w, ci, color, cfg.Docker.Readme, cfg.Docker.Registries, rootDir)
 	}
 
 	// --- Retention ---
+	var retentionSummary string
 	if hasRetention(plan) {
-		retentionErr := runRetention(ctx, w, ci, plan)
-		if retentionErr != nil && verbose {
-			fmt.Fprintf(os.Stderr, "retention warning: %v\n", retentionErr)
-		}
+		retentionSummary, _ = runRetentionSection(ctx, w, ci, color, plan)
 	}
 
-	// --- Report (non-CI gets full image list) ---
-	if !ci {
-		for _, sr := range result.Steps {
-			for _, img := range sr.Images {
-				fmt.Printf("  → %s\n", img)
-			}
-		}
-	} else {
-		// CI: print all pushed image refs for easy copy
-		output.SectionStartCollapsed(w, "sf_images", "Image References")
-		for _, sr := range result.Steps {
-			for _, img := range sr.Images {
-				fmt.Fprintf(w, "  → %s\n", img)
-			}
-		}
-		output.SectionEnd(w, "sf_images")
+	// --- Summary ---
+	totalElapsed := time.Since(pipelineStart)
+	overallStatus := "success"
+
+	sumSec := output.NewSection(w, "Summary", 0, color)
+
+	// Lint
+	lintStatus := "success"
+	if lintSummary == "--skip-lint" {
+		lintStatus = "skipped"
 	}
+	output.SummaryRow(w, "lint", lintStatus, lintSummary, color)
+
+	// Detect
+	output.SummaryRow(w, "detect", "success", detectSummary, color)
+
+	// Plan
+	output.SummaryRow(w, "plan", "success", planSummary, color)
+
+	// Build
+	output.SummaryRow(w, "build", "success", buildSummary, color)
+
+	// Push
+	if pushSummary != "" {
+		output.SummaryRow(w, "push", "success", pushSummary, color)
+	}
+
+	// Readme
+	if readmeSummary != "" {
+		output.SummaryRow(w, "readme", "success", readmeSummary, color)
+	}
+
+	// Retention
+	if retentionSummary != "" {
+		output.SummaryRow(w, "retention", "success", retentionSummary, color)
+	}
+
+	sumSec.Separator()
+	output.SummaryTotal(w, totalElapsed, overallStatus, color)
+	sumSec.Close()
+
+	// --- Image References ---
+	fmt.Fprintf(w, "\n    Image References\n")
+	for _, sr := range result.Steps {
+		for _, img := range sr.Images {
+			fmt.Fprintf(w, "    → %s\n", img)
+		}
+	}
+	fmt.Fprintln(w)
 
 	return nil
 }
 
-func runPreBuildLint(ctx context.Context, rootDir string, ci bool) error {
+func runPreBuildLint(ctx context.Context, rootDir string, ci bool, color bool, w io.Writer) (string, error) {
+	cacheDir := lint.ResolveCacheDir(rootDir, cfg.Lint.CacheDir)
 	cache := &lint.Cache{
-		RootDir: rootDir,
+		Dir:     cacheDir,
 		Enabled: true,
 	}
 
-	engine, err := lint.NewEngine(cfg.Lint, rootDir, nil, nil, verbose, cache)
+	lintEngine, err := lint.NewEngine(cfg.Lint, rootDir, nil, nil, verbose, cache)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	files, err := engine.CollectFiles()
+	files, err := lintEngine.CollectFiles()
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	// Delta filtering
@@ -335,12 +402,13 @@ func runPreBuildLint(ctx context.Context, rootDir string, ci bool) error {
 	}
 
 	start := time.Now()
-	findings, runErr := engine.Run(ctx, files)
+	findings, modStats, runErr := lintEngine.RunWithStats(ctx, files)
 	findings = append(findings, modules.CheckFilenameCollisions(files)...)
 	elapsed := time.Since(start)
 
 	// Tally
 	var critical, warning int
+	var totalFiles, totalCached int
 	for _, f := range findings {
 		switch f.Severity {
 		case lint.SeverityCritical:
@@ -349,36 +417,44 @@ func runPreBuildLint(ctx context.Context, rootDir string, ci bool) error {
 			warning++
 		}
 	}
-
-	cached := engine.CacheHits.Load()
+	for _, ms := range modStats {
+		totalFiles += ms.Files
+		totalCached += ms.Cached
+	}
 
 	// Write JUnit XML in CI for GitLab test reporting
 	if ci {
-		moduleNames := engine.ModuleNames()
+		moduleNames := lintEngine.ModuleNames()
 		if jErr := output.WriteLintJUnit(".stagefreight/reports", findings, files, moduleNames, elapsed); jErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to write junit report: %v\n", jErr)
 		}
 	}
 
+	// Section output
+	sec := output.NewSection(w, "Lint", elapsed, color)
+	output.LintTable(w, modStats, color)
+	sec.Separator()
+	sec.Row("%-16s%5d   %5d   %d findings (%d critical)",
+		"total", totalFiles, totalCached, len(findings), critical)
+	sec.Close()
+
 	if critical > 0 {
 		printer := output.NewPrinter()
 		printer.Print(findings)
-		detail := fmt.Sprintf("%d critical, %d warning in %d files", critical, warning, len(files))
-		output.PhaseResult(os.Stdout, "lint", "failed", detail, elapsed)
-		return fmt.Errorf("lint failed: %d critical findings", critical)
+		summary := fmt.Sprintf("%d files, %d cached, %d critical", len(files), totalCached, critical)
+		return summary, fmt.Errorf("lint failed: %d critical findings", critical)
 	}
 
-	detail := fmt.Sprintf("%d files, %d cached, 0 critical", len(files), cached)
+	summary := fmt.Sprintf("%d files, %d cached, 0 critical", len(files), totalCached)
 	if warning > 0 {
-		detail = fmt.Sprintf("%d files, %d cached, %d warnings", len(files), cached, warning)
+		summary = fmt.Sprintf("%d files, %d cached, %d warnings", len(files), totalCached, warning)
 	}
-	output.PhaseResult(os.Stdout, "lint", "success", detail, elapsed)
 
 	if runErr != nil && verbose {
 		fmt.Fprintf(os.Stderr, "lint warning: %v\n", runErr)
 	}
 
-	return nil
+	return summary, nil
 }
 
 // hasRetention returns true if any step has a registry with retention configured.
@@ -396,14 +472,16 @@ func hasRetention(plan *build.BuildPlan) bool {
 	return false
 }
 
-// runRetention applies tag retention for all registries that have it configured.
-// Runs after a successful push. Errors are logged but do not fail the build.
-func runRetention(ctx context.Context, w io.Writer, ci bool, plan *build.BuildPlan) error {
+// runRetentionSection applies tag retention with section-formatted output.
+// Returns a summary string and elapsed time for the summary table.
+func runRetentionSection(ctx context.Context, w io.Writer, _ bool, color bool, plan *build.BuildPlan) (string, time.Duration) {
 	output.SectionStartCollapsed(w, "sf_retention", "Retention")
 	retStart := time.Now()
 
 	var totalDeleted int
+	var totalKept int
 	var totalErrors int
+	var deletedNames []string
 
 	for _, step := range plan.Steps {
 		if !step.Push {
@@ -416,49 +494,46 @@ func runRetention(ctx context.Context, w io.Writer, ci bool, plan *build.BuildPl
 
 			client, err := registry.NewRegistry(reg.Provider, reg.URL, reg.Credentials)
 			if err != nil {
-				fmt.Fprintf(w, "  retention: skip %s/%s: %v\n", reg.URL, reg.Path, err)
 				totalErrors++
 				continue
 			}
 
 			result, err := registry.ApplyRetention(ctx, client, reg.Path, reg.TagPatterns, reg.Retention)
 			if err != nil {
-				fmt.Fprintf(w, "  retention: %s/%s: %v\n", reg.URL, reg.Path, err)
 				totalErrors++
 				continue
 			}
 
-			if len(result.Deleted) > 0 {
-				fmt.Fprintf(w, "  retention: %s/%s: matched=%d kept=%d deleted=%d\n",
-					reg.URL, reg.Path, result.Matched, result.Kept, len(result.Deleted))
-				for _, d := range result.Deleted {
-					fmt.Fprintf(w, "    - %s\n", d)
-				}
-			}
+			totalKept += result.Kept
 			totalDeleted += len(result.Deleted)
 			totalErrors += len(result.Errors)
+			deletedNames = append(deletedNames, result.Deleted...)
 		}
 	}
 
 	retElapsed := time.Since(retStart)
 
-	detail := fmt.Sprintf("deleted %d tag(s)", totalDeleted)
-	if totalErrors > 0 {
-		detail += fmt.Sprintf(", %d error(s)", totalErrors)
+	sec := output.NewSection(w, "Retention", retElapsed, color)
+	for _, step := range plan.Steps {
+		for _, reg := range step.Registries {
+			if !reg.Retention.Active() {
+				continue
+			}
+			sec.Row("%-40skept %d, pruned %d", reg.URL+"/"+reg.Path, totalKept, totalDeleted)
+		}
 	}
-	if totalDeleted == 0 && totalErrors == 0 {
-		detail = "nothing to prune"
+	for _, d := range deletedNames {
+		sec.Row("  - %s", d)
 	}
-
-	status := "success"
-	if totalErrors > 0 && totalDeleted == 0 {
-		status = "failed"
-	}
-
-	output.PhaseResult(w, "retention", status, detail, retElapsed)
+	sec.Close()
 	output.SectionEnd(w, "sf_retention")
 
-	return nil
+	summary := fmt.Sprintf("kept %d, pruned %d", totalKept, totalDeleted)
+	if totalErrors > 0 {
+		summary += fmt.Sprintf(", %d error(s)", totalErrors)
+	}
+
+	return summary, retElapsed
 }
 
 // hasRemoteRegistries returns true if the registry list has any non-local providers.
@@ -508,4 +583,96 @@ func formatPlatforms(steps []build.BuildStep) string {
 		result += p
 	}
 	return result
+}
+
+// buildContextKV returns key-value pairs for the pipeline context block.
+func buildContextKV() []output.KV {
+	var kv []output.KV
+
+	if pipe := os.Getenv("CI_PIPELINE_ID"); pipe != "" {
+		kv = append(kv, output.KV{Key: "Pipeline", Value: pipe})
+	}
+	if runner := os.Getenv("CI_RUNNER_DESCRIPTION"); runner != "" {
+		kv = append(kv, output.KV{Key: "Runner", Value: runner})
+	}
+
+	if sha := os.Getenv("CI_COMMIT_SHORT_SHA"); sha != "" {
+		kv = append(kv, output.KV{Key: "Commit", Value: sha})
+	} else if sha := os.Getenv("CI_COMMIT_SHA"); sha != "" && len(sha) >= 8 {
+		kv = append(kv, output.KV{Key: "Commit", Value: sha[:8]})
+	}
+	if branch := os.Getenv("CI_COMMIT_BRANCH"); branch != "" {
+		kv = append(kv, output.KV{Key: "Branch", Value: branch})
+	} else if tag := os.Getenv("CI_COMMIT_TAG"); tag != "" {
+		kv = append(kv, output.KV{Key: "Tag", Value: tag})
+	}
+
+	platforms := formatPlatforms(nil) // filled after plan, but context block is pre-plan
+	if p := os.Getenv("STAGEFREIGHT_PLATFORMS"); p != "" {
+		platforms = p
+	}
+	if platforms != "" {
+		kv = append(kv, output.KV{Key: "Platforms", Value: platforms})
+	}
+
+	// Count configured registries
+	regCount := len(cfg.Docker.Registries)
+	if regCount > 0 {
+		var regNames []string
+		seen := make(map[string]bool)
+		for _, r := range cfg.Docker.Registries {
+			if !seen[r.URL] {
+				regNames = append(regNames, r.URL)
+				seen[r.URL] = true
+			}
+		}
+		kv = append(kv, output.KV{Key: "Registries", Value: fmt.Sprintf("%d (%s)", regCount, strings.Join(regNames, ", "))})
+	}
+
+	return kv
+}
+
+// runReadmeSyncSection wraps readme sync with section-formatted output.
+func runReadmeSyncSection(ctx context.Context, w io.Writer, _ bool, color bool, readmeCfg config.DockerReadmeConfig, registries []config.RegistryConfig, rootDir string) (string, time.Duration) {
+	output.SectionStartCollapsed(w, "sf_readme", "README Sync")
+	start := time.Now()
+
+	content, err := registry.PrepareReadme(readmeCfg, rootDir)
+	if err != nil {
+		elapsed := time.Since(start)
+		sec := output.NewSection(w, "Readme", elapsed, color)
+		sec.Row("error: %v", err)
+		sec.Close()
+		output.SectionEnd(w, "sf_readme")
+		return fmt.Sprintf("error: %v", err), elapsed
+	}
+
+	synced, _, errors := syncReadmeToRegistries(ctx, w, readmeCfg, registries, content)
+	elapsed := time.Since(start)
+
+	sec := output.NewSection(w, "Readme", elapsed, color)
+	for _, reg := range registries {
+		provider := reg.Provider
+		if provider == "" {
+			provider = "generic"
+		}
+		switch provider {
+		case "dockerhub", "quay", "harbor":
+			badgeCount := len(readmeCfg.Badges)
+			if badgeCount > 0 {
+				sec.Row("%-40ssynced (%d badges)", reg.URL+"/"+reg.Path, badgeCount)
+			} else {
+				sec.Row("%-40ssynced", reg.URL+"/"+reg.Path)
+			}
+		}
+	}
+	sec.Close()
+	output.SectionEnd(w, "sf_readme")
+
+	summary := fmt.Sprintf("%d synced", synced)
+	if errors > 0 {
+		summary += fmt.Sprintf(", %d error(s)", errors)
+	}
+
+	return summary, elapsed
 }

@@ -9,20 +9,56 @@ import (
 	"path/filepath"
 )
 
-const (
-	cacheDir       = ".stagefreight/cache/lint"
-	engineVersion  = "0.1.0"
-)
+const engineVersion = "0.1.0"
 
 // Cache provides content-addressed lint result caching.
+// Dir is the resolved cache directory (call ResolveCacheDir to compute it).
 type Cache struct {
-	RootDir string
+	Dir     string
 	Enabled bool
 }
 
 // cacheEntry stores cached findings for a file+module combination.
 type cacheEntry struct {
 	Findings []Finding `json:"findings"`
+}
+
+// ResolveCacheDir determines the cache directory using the following precedence:
+//  1. STAGEFREIGHT_CACHE_DIR env var (used as-is, caller controls the path)
+//  2. configDir from .stagefreight.yml cache_dir (resolved relative to rootDir)
+//  3. os.UserCacheDir()/stagefreight/<project-hash>/lint (XDG-aware default)
+//
+// The project hash is a truncated SHA-256 of the absolute rootDir path,
+// keeping per-project caches isolated without long nested directory names.
+func ResolveCacheDir(rootDir string, configDir string) string {
+	// 1. Env var takes priority
+	if dir := os.Getenv("STAGEFREIGHT_CACHE_DIR"); dir != "" {
+		return filepath.Join(dir, "lint")
+	}
+
+	// 2. Config-specified directory (relative to project root)
+	if configDir != "" {
+		if filepath.IsAbs(configDir) {
+			return filepath.Join(configDir, "lint")
+		}
+		return filepath.Join(rootDir, configDir, "lint")
+	}
+
+	// 3. XDG-aware default via os.UserCacheDir
+	base, err := os.UserCacheDir()
+	if err != nil {
+		// Last resort: temp directory
+		base = os.TempDir()
+	}
+
+	absRoot, err := filepath.Abs(rootDir)
+	if err != nil {
+		absRoot = rootDir
+	}
+	h := sha256.Sum256([]byte(absRoot))
+	projectHash := hex.EncodeToString(h[:])[:12]
+
+	return filepath.Join(base, "stagefreight", projectHash, "lint")
 }
 
 // Key computes a cache key from file content, module name, and config.
@@ -77,61 +113,12 @@ func (c *Cache) Put(key string, findings []Finding) error {
 
 // Clear removes the entire cache directory.
 func (c *Cache) Clear() error {
-	dir := filepath.Join(c.RootDir, cacheDir)
-	return os.RemoveAll(dir)
+	return os.RemoveAll(c.Dir)
 }
 
 // path returns the filesystem path for a cache key.
 // Uses 2-char prefix subdirectory to avoid huge flat directories.
 func (c *Cache) path(key string) string {
 	prefix := key[:2]
-	return filepath.Join(c.RootDir, cacheDir, prefix, key+".json")
-}
-
-// EnsureGitignore adds .stagefreight/ to .gitignore if not already present.
-func EnsureGitignore(rootDir string) {
-	gitignorePath := filepath.Join(rootDir, ".gitignore")
-	entry := ".stagefreight/"
-
-	data, err := os.ReadFile(gitignorePath)
-	if err == nil {
-		// Check if already present
-		for _, line := range splitLines(data) {
-			if line == entry {
-				return
-			}
-		}
-	}
-
-	// Append
-	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return // best effort
-	}
-	defer f.Close()
-
-	// Add newline before entry if file doesn't end with one
-	if len(data) > 0 && data[len(data)-1] != '\n' {
-		f.WriteString("\n")
-	}
-	f.WriteString(entry + "\n")
-}
-
-func splitLines(data []byte) []string {
-	var lines []string
-	start := 0
-	for i, b := range data {
-		if b == '\n' {
-			line := string(data[start:i])
-			if len(line) > 0 && line[len(line)-1] == '\r' {
-				line = line[:len(line)-1]
-			}
-			lines = append(lines, line)
-			start = i + 1
-		}
-	}
-	if start < len(data) {
-		lines = append(lines, string(data[start:]))
-	}
-	return lines
+	return filepath.Join(c.Dir, prefix, key+".json")
 }

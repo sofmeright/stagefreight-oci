@@ -17,6 +17,7 @@ type ModuleConfig struct {
 // LintConfig holds lint-specific configuration.
 type LintConfig struct {
 	Level         Level                   `yaml:"level"`
+	CacheDir      string                  `yaml:"cache_dir"`
 	Exclude       []string                `yaml:"exclude"`
 	Modules       map[string]ModuleConfig `yaml:"modules"`
 	LargeFilesMax int64                   `yaml:"large_files_max"`

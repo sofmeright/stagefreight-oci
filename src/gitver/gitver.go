@@ -28,7 +28,20 @@ type VersionInfo struct {
 var semverRe = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-(.+))?$`)
 
 // DetectVersion resolves version info from git tags and refs.
+// Looks for tags matching v* (plain semver tags).
 func DetectVersion(rootDir string) (*VersionInfo, error) {
+	return DetectScopedVersion(rootDir, "")
+}
+
+// DetectScopedVersion resolves version info from git tags with an optional scope prefix.
+// When scope is empty, matches plain v* tags (e.g., v0.2.1).
+// When scope is set, matches SCOPE-v* tags (e.g., component-v1.0.3) and strips the prefix.
+//
+// This enables independent versioning for multiple artifacts in the same repo:
+//
+//	DetectScopedVersion(dir, "")          → v0.2.1          → "0.2.1"
+//	DetectScopedVersion(dir, "component") → component-v1.0.3 → "1.0.3"
+func DetectScopedVersion(rootDir string, scope string) (*VersionInfo, error) {
 	v := &VersionInfo{}
 
 	// Get current SHA
@@ -44,10 +57,18 @@ func DetectVersion(rootDir string) (*VersionInfo, error) {
 		v.Branch = branch
 	}
 
-	// Try to get version from git describe (nearest tag)
-	desc, err := gitCmd(rootDir, "describe", "--tags", "--abbrev=0")
+	// Build tag match pattern
+	var matchPattern string
+	if scope != "" {
+		matchPattern = scope + "-v*"
+	} else {
+		matchPattern = "v*"
+	}
+
+	// Try to get version from git describe (nearest matching tag)
+	desc, err := gitCmd(rootDir, "describe", "--tags", "--abbrev=0", "--match", matchPattern)
 	if err != nil {
-		// No tags — use dev version
+		// No matching tags — use dev version
 		v.Version = fmt.Sprintf("0.0.0-dev+%s", v.SHA)
 		v.Base = "0.0.0"
 		v.Major = "0"
@@ -57,11 +78,16 @@ func DetectVersion(rootDir string) (*VersionInfo, error) {
 	}
 
 	// Check if HEAD is exactly the tag (clean release)
-	exactTag, exactErr := gitCmd(rootDir, "describe", "--tags", "--exact-match")
+	exactTag, exactErr := gitCmd(rootDir, "describe", "--tags", "--exact-match", "--match", matchPattern)
 	v.IsRelease = exactTag != "" && exactErr == nil
 
-	// Parse semver from tag
+	// Strip scope prefix before parsing semver
 	tag := strings.TrimSpace(desc)
+	if scope != "" {
+		tag = strings.TrimPrefix(tag, scope+"-")
+	}
+
+	// Parse semver from tag
 	if m := semverRe.FindStringSubmatch(tag); m != nil {
 		v.Major = m[1]
 		v.Minor = m[2]

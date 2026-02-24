@@ -55,8 +55,9 @@ func runLint(cmd *cobra.Command, args []string) error {
 	}
 
 	// Set up cache
+	cacheDir := lint.ResolveCacheDir(rootDir, cfg.Lint.CacheDir)
 	cache := &lint.Cache{
-		RootDir: rootDir,
+		Dir:     cacheDir,
 		Enabled: !lintNoCache,
 	}
 	if lintNoCache {
@@ -64,9 +65,6 @@ func runLint(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "cache: clear failed: %v\n", err)
 		}
 	}
-
-	// Ensure .stagefreight/ is in .gitignore
-	lint.EnsureGitignore(rootDir)
 
 	engine, err := lint.NewEngine(cfg.Lint, rootDir, lintModules, lintNoModule, verbose, cache)
 	if err != nil {

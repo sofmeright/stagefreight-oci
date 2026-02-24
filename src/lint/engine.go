@@ -87,14 +87,36 @@ func NewEngine(cfg config.LintConfig, rootDir string, moduleNames []string, skip
 	}, nil
 }
 
+// ModuleStats holds per-module scan statistics.
+type ModuleStats struct {
+	Name     string
+	Files    int
+	Cached   int
+	Findings int
+	Critical int
+	Warnings int
+}
+
 // Run executes all modules against the given files and returns findings.
 func (e *Engine) Run(ctx context.Context, files []FileInfo) ([]Finding, error) {
+	findings, _, err := e.RunWithStats(ctx, files)
+	return findings, err
+}
+
+// RunWithStats executes all modules and returns findings plus per-module statistics.
+func (e *Engine) RunWithStats(ctx context.Context, files []FileInfo) ([]Finding, []ModuleStats, error) {
 	var (
 		mu       sync.Mutex
 		findings []Finding
 		wg       sync.WaitGroup
 		errs     []error
 	)
+
+	// Per-module stat counters (index matches e.Modules)
+	modStats := make([]ModuleStats, len(e.Modules))
+	for i, m := range e.Modules {
+		modStats[i].Name = m.Name()
+	}
 
 	for _, file := range files {
 		if e.isExcluded(file.Path) {
@@ -112,9 +134,9 @@ func (e *Engine) Run(ctx context.Context, files []FileInfo) ([]Finding, error) {
 			}
 		}
 
-		for _, mod := range e.Modules {
+		for mi, mod := range e.Modules {
 			wg.Add(1)
-			go func(m Module, f FileInfo, data []byte) {
+			go func(m Module, f FileInfo, data []byte, idx int) {
 				defer wg.Done()
 
 				// Check cache
@@ -124,6 +146,16 @@ func (e *Engine) Run(ctx context.Context, files []FileInfo) ([]Finding, error) {
 					if cached, ok := e.Cache.Get(key); ok {
 						e.CacheHits.Add(1)
 						mu.Lock()
+						modStats[idx].Files++
+						modStats[idx].Cached++
+						for _, f := range cached {
+							modStats[idx].Findings++
+							if f.Severity == SeverityCritical {
+								modStats[idx].Critical++
+							} else if f.Severity == SeverityWarning {
+								modStats[idx].Warnings++
+							}
+						}
 						findings = append(findings, cached...)
 						mu.Unlock()
 						return
@@ -134,9 +166,18 @@ func (e *Engine) Run(ctx context.Context, files []FileInfo) ([]Finding, error) {
 					results, err := m.Check(ctx, f)
 					mu.Lock()
 					defer mu.Unlock()
+					modStats[idx].Files++
 					if err != nil {
 						errs = append(errs, fmt.Errorf("%s: %s: %w", m.Name(), f.Path, err))
 						return
+					}
+					for _, r := range results {
+						modStats[idx].Findings++
+						if r.Severity == SeverityCritical {
+							modStats[idx].Critical++
+						} else if r.Severity == SeverityWarning {
+							modStats[idx].Warnings++
+						}
 					}
 					findings = append(findings, results...)
 					// Cache even empty results (clean pass)
@@ -150,22 +191,31 @@ func (e *Engine) Run(ctx context.Context, files []FileInfo) ([]Finding, error) {
 				results, err := m.Check(ctx, f)
 				mu.Lock()
 				defer mu.Unlock()
+				modStats[idx].Files++
 				if err != nil {
 					errs = append(errs, fmt.Errorf("%s: %s: %w", m.Name(), f.Path, err))
 					return
 				}
+				for _, r := range results {
+					modStats[idx].Findings++
+					if r.Severity == SeverityCritical {
+						modStats[idx].Critical++
+					} else if r.Severity == SeverityWarning {
+						modStats[idx].Warnings++
+					}
+				}
 				findings = append(findings, results...)
-			}(mod, file, content)
+			}(mod, file, content, mi)
 		}
 	}
 
 	wg.Wait()
 
 	if len(errs) > 0 {
-		return findings, fmt.Errorf("%d module errors (first: %w)", len(errs), errs[0])
+		return findings, modStats, fmt.Errorf("%d module errors (first: %w)", len(errs), errs[0])
 	}
 
-	return findings, nil
+	return findings, modStats, nil
 }
 
 // CollectFiles walks the root directory and returns FileInfo for all regular files.

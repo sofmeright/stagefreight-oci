@@ -143,3 +143,25 @@ func isTerminal() bool {
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
 }
+
+// UseColor returns true if colored output should be used.
+// Respects NO_COLOR env, TERM=dumb, and terminal detection.
+func UseColor() bool {
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	if os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	return isTerminal() || IsCI()
+}
+
+// LintTable writes a per-module stats table inside a section.
+func LintTable(w io.Writer, stats []lint.ModuleStats, _ bool) {
+	// Header
+	fmt.Fprintf(w, "    │ %-16s%6s  %6s  %s\n", "module", "files", "cached", "findings")
+
+	for _, s := range stats {
+		fmt.Fprintf(w, "    │ %-16s%5d   %5d   %5d\n", s.Name, s.Files, s.Cached, s.Findings)
+	}
+}
