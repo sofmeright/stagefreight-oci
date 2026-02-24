@@ -47,8 +47,6 @@ type packageRef struct {
 var (
 	// FROM [--platform=...] <image> [AS <name>]
 	fromRe = regexp.MustCompile(`(?i)^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?`)
-	// ENV KEY=VALUE or ENV KEY VALUE (single pair)
-	envRe = regexp.MustCompile(`(?i)^ENV\s+(\S+?)(?:=|\s+)(.+)`)
 	// ARG KEY=VALUE
 	argRe = regexp.MustCompile(`(?i)^ARG\s+(\S+?)=(.+)`)
 	// GitHub release download patterns in wget/curl commands
@@ -94,13 +92,10 @@ func parseDockerfileForFreshness(path string) (*DockerFreshnessInfo, error) {
 			return
 		}
 
-		// ENV
-		if m := envRe.FindStringSubmatch(line); m != nil {
-			name := m[1]
-			value := strings.TrimSpace(m[2])
-			// Strip surrounding quotes
-			value = strings.Trim(value, `"'`)
-			info.EnvVars[name] = envVar{Name: name, Value: value, Line: endLine}
+		// ENV — handles both old-style (ENV KEY VALUE) and new-style
+		// multi-var (ENV K1=V1 K2=V2 K3=V3)
+		if strings.HasPrefix(strings.ToUpper(line), "ENV ") {
+			parseEnvLine(info, line[4:], endLine)
 			return
 		}
 
@@ -156,6 +151,90 @@ func parseDockerfileForFreshness(path string) (*DockerFreshnessInfo, error) {
 	info.PinnedTools = crossRefTools(info)
 
 	return info, nil
+}
+
+// parseEnvLine handles both Docker ENV syntaxes:
+//
+//	Old-style (single var):  ENV KEY VALUE WITH SPACES
+//	New-style (multi-var):   ENV K1=V1 K2=V2 K3="value with spaces"
+//
+// New-style is detected by the presence of '=' in the first token.
+func parseEnvLine(info *DockerFreshnessInfo, body string, line int) {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return
+	}
+
+	// Check if this is new-style (KEY=VALUE pairs) by looking for '=' in the first token.
+	firstSpace := strings.IndexByte(body, ' ')
+	firstEquals := strings.IndexByte(body, '=')
+
+	if firstEquals < 0 {
+		// No equals sign at all: old-style "ENV KEY VALUE"
+		// The first token is the key, the rest is the value.
+		if firstSpace < 0 {
+			// "ENV KEY" with no value
+			return
+		}
+		name := body[:firstSpace]
+		value := strings.TrimSpace(body[firstSpace+1:])
+		value = strings.Trim(value, `"'`)
+		info.EnvVars[name] = envVar{Name: name, Value: value, Line: line}
+		return
+	}
+
+	if firstSpace >= 0 && firstSpace < firstEquals {
+		// Space comes before equals: old-style "ENV KEY VALUE=SOMETHING"
+		name := body[:firstSpace]
+		value := strings.TrimSpace(body[firstSpace+1:])
+		value = strings.Trim(value, `"'`)
+		info.EnvVars[name] = envVar{Name: name, Value: value, Line: line}
+		return
+	}
+
+	// New-style: KEY1=VALUE1 KEY2=VALUE2 ...
+	// Parse each KEY=VALUE pair, respecting quoted values.
+	for body != "" {
+		body = strings.TrimSpace(body)
+		if body == "" {
+			break
+		}
+
+		eqIdx := strings.IndexByte(body, '=')
+		if eqIdx < 0 {
+			break
+		}
+
+		name := body[:eqIdx]
+		rest := body[eqIdx+1:]
+
+		var value string
+		if len(rest) > 0 && (rest[0] == '"' || rest[0] == '\'') {
+			// Quoted value — find matching close quote.
+			quote := rest[0]
+			end := strings.IndexByte(rest[1:], quote)
+			if end < 0 {
+				// Unterminated quote — take everything.
+				value = rest[1:]
+				body = ""
+			} else {
+				value = rest[1 : end+1]
+				body = rest[end+2:]
+			}
+		} else {
+			// Unquoted value — ends at next whitespace.
+			spIdx := strings.IndexAny(rest, " \t")
+			if spIdx < 0 {
+				value = rest
+				body = ""
+			} else {
+				value = rest[:spIdx]
+				body = rest[spIdx+1:]
+			}
+		}
+
+		info.EnvVars[name] = envVar{Name: name, Value: value, Line: line}
+	}
 }
 
 // parseRunLine extracts package installs and GitHub URLs from a RUN instruction body.

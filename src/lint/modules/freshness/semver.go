@@ -100,16 +100,25 @@ func parseVersion(s string) *masterminds.Version {
 	return v
 }
 
-// filterTagsBySuffix returns tags from the list that share the same suffix.
+// filterTagsBySuffix returns tags from the list that share the same suffix,
+// excluding date-like tags (e.g. "20220328") that aren't real semver.
 func filterTagsBySuffix(tags []string, suffix string) []decomposedTag {
 	var out []decomposedTag
 	for _, t := range tags {
 		dt := decomposeTag(t)
-		if dt.Version != nil && dt.Suffix == suffix {
+		if dt.Version != nil && dt.Suffix == suffix && !isDateLikeVersion(dt.Version) {
 			out = append(out, dt)
 		}
 	}
 	return out
+}
+
+// isDateLikeVersion returns true if the version looks like a date (YYYYMMDD)
+// rather than real semver. These show up in Docker Hub tags for Alpine, Ubuntu,
+// etc. and would otherwise win any semver comparison (20220328.0.0 > 3.22.1).
+func isDateLikeVersion(v *masterminds.Version) bool {
+	// Date tags are single-component numbers >= 19700101 with no minor/patch.
+	return v.Minor() == 0 && v.Patch() == 0 && v.Major() >= 19700101
 }
 
 // latestInFamily finds the highest version among decomposed tags.
