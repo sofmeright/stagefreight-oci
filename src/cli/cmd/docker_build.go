@@ -21,6 +21,7 @@ import (
 	"github.com/sofmeright/stagefreight/src/lint/modules"
 	"github.com/sofmeright/stagefreight/src/output"
 	"github.com/sofmeright/stagefreight/src/registry"
+	"github.com/sofmeright/stagefreight/src/version"
 )
 
 var (
@@ -73,12 +74,8 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 		gitver.SetProjectDescription(cfg.Docker.Readme.Description)
 	}
 
-	// Banner — detect version early for display
-	bannerInfo := output.BannerInfo{}
-	if vi, verr := build.DetectVersion(rootDir); verr == nil && vi != nil {
-		bannerInfo = output.NewBannerInfo(vi.Version, vi.SHA, vi.Branch)
-	}
-	output.Banner(w, bannerInfo, color)
+	// Banner — StageFreight's own identity from build-time ldflags
+	output.Banner(w, output.NewBannerInfo(version.Version, version.Commit, ""), color)
 
 	// Pipeline context block
 	output.ContextBlock(w, buildContextKV())

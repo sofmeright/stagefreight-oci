@@ -36,6 +36,9 @@ RUN apk add --no-cache \
       git \
       tree
 
+# UTF-8 locale for chafa Unicode block characters in CI logs.
+ENV LANG=C.UTF-8
+
 # Pinned tool versions — bump these for updates.
 ENV BUILDX_VERSION=v0.31.1 \
     TRIVY_VERSION=0.69.1 \
