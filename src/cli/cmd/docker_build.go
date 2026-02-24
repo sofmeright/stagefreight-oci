@@ -234,9 +234,10 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 	output.SectionStart(w, "sf_build", "Build")
 	buildStart := time.Now()
 
-	// In CI, capture buildx output to suppress noise
+	// In CI, capture buildx output to suppress noise; use layer parsing for structured display
 	bx := build.NewBuildx(verbose)
-	if ci && !verbose {
+	parseLayers := ci && !verbose
+	if parseLayers {
 		bx.Stdout = &bytes.Buffer{}
 		bx.Stderr = &bytes.Buffer{}
 	}
@@ -255,10 +256,22 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 	// Build each step
 	var result build.BuildResult
 	for _, step := range plan.Steps {
-		stepResult, err := bx.Build(ctx, step)
+		var stepResult *build.StepResult
+		var layers []build.LayerEvent
+		var err error
+
+		if parseLayers {
+			stepResult, layers, err = bx.BuildWithLayers(ctx, step)
+			if stepResult != nil {
+				stepResult.Layers = layers
+			}
+		} else {
+			stepResult, err = bx.Build(ctx, step)
+		}
+
 		result.Steps = append(result.Steps, *stepResult)
 		if err != nil {
-			if ci && !verbose {
+			if parseLayers {
 				if buf, ok := bx.Stderr.(*bytes.Buffer); ok && buf.Len() > 0 {
 					fmt.Fprint(w, buf.String())
 				}
@@ -271,6 +284,28 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 
 	// Build section output
 	buildSec := output.NewSection(w, "Build", buildElapsed, color)
+
+	// Render layer events if available
+	hasLayers := false
+	for _, sr := range result.Steps {
+		for _, layer := range sr.Layers {
+			instr := build.FormatLayerInstruction(layer)
+			timing := build.FormatLayerTiming(layer)
+
+			var label string
+			if layer.Instruction == "FROM" {
+				label = "base"
+			} else {
+				label = layer.Instruction
+			}
+			buildSec.Row("%-8s%-42s %s", label, instr, timing)
+			hasLayers = true
+		}
+	}
+	if hasLayers {
+		buildSec.Separator()
+	}
+
 	var buildImageCount int
 	var buildSummaryParts []string
 	for _, sr := range result.Steps {

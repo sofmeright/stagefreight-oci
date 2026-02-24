@@ -27,6 +27,8 @@ func NewBuildx(verbose bool) *Buildx {
 }
 
 // Build executes a single build step via docker buildx.
+// When ParseLayers is true, buildx runs with --progress=plain and the output
+// is parsed into layer events for structured display.
 func (bx *Buildx) Build(ctx context.Context, step BuildStep) (*StepResult, error) {
 	start := time.Now()
 	result := &StepResult{
@@ -55,6 +57,73 @@ func (bx *Buildx) Build(ctx context.Context, step BuildStep) (*StepResult, error
 	result.Images = step.Tags
 
 	return result, nil
+}
+
+// BuildWithLayers executes a build step and parses the output for layer events.
+// Uses --progress=plain to get parseable output. The original Stdout/Stderr
+// writers receive the raw output; layer events are parsed from the stderr copy.
+func (bx *Buildx) BuildWithLayers(ctx context.Context, step BuildStep) (*StepResult, []LayerEvent, error) {
+	start := time.Now()
+	result := &StepResult{
+		Name: step.Name,
+	}
+
+	args := bx.buildArgs(step)
+	// Inject --progress=plain for parseable output
+	args = injectProgressPlain(args)
+
+	if bx.Verbose {
+		fmt.Fprintf(bx.Stderr, "exec: docker %s\n", strings.Join(args, " "))
+	}
+
+	// Capture stderr for parsing while still forwarding to original writer.
+	var stderrBuf strings.Builder
+	var stderrWriter io.Writer
+	if bx.Stderr != nil {
+		stderrWriter = io.MultiWriter(bx.Stderr, &stderrBuf)
+	} else {
+		stderrWriter = &stderrBuf
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Stdout = bx.Stdout
+	cmd.Stderr = stderrWriter
+
+	if err := cmd.Run(); err != nil {
+		result.Status = "failed"
+		result.Duration = time.Since(start)
+		result.Error = fmt.Errorf("docker buildx build failed: %w", err)
+		return result, nil, result.Error
+	}
+
+	result.Status = "success"
+	result.Duration = time.Since(start)
+	result.Images = step.Tags
+
+	// Parse layer events from captured stderr.
+	layers := ParseBuildxOutput(stderrBuf.String())
+
+	return result, layers, nil
+}
+
+// injectProgressPlain adds --progress=plain to buildx args if not already present.
+func injectProgressPlain(args []string) []string {
+	for _, a := range args {
+		if strings.HasPrefix(a, "--progress") {
+			return args
+		}
+	}
+	// Insert after "buildx build"
+	for i, a := range args {
+		if a == "build" && i > 0 && args[i-1] == "buildx" {
+			result := make([]string, 0, len(args)+1)
+			result = append(result, args[:i+1]...)
+			result = append(result, "--progress=plain")
+			result = append(result, args[i+1:]...)
+			return result
+		}
+	}
+	return args
 }
 
 // buildArgs constructs the docker buildx build argument list.

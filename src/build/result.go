@@ -14,6 +14,7 @@ type StepResult struct {
 	Status    string        // "success", "failed", "cached"
 	Images    []string      // pushed image references
 	Artifacts []string      // extracted file paths
+	Layers    []LayerEvent  // parsed build layer events (from --progress=plain)
 	Duration  time.Duration
 	Error     error
 }

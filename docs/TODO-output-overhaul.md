@@ -107,61 +107,20 @@ Files: `narrator.go`, `narrator_compose.go`, `narrator_run.go`
 
 ---
 
-## 10. Build Streaming
+## 10. Build Streaming — DONE
 
-**Status: TODO** (hardest piece)
+`src/build/parser.go` — `ParseBuildxOutput()`, `LayerEvent`, `FormatLayerTiming()`,
+`FormatLayerInstruction()`. Regex-based parser for buildx `--progress=plain` output.
+Extracts stage, instruction, detail, cached/timing from `#N [stage M/N] INSTRUCTION` lines.
 
-Parse buildx output stream for layer-by-layer progress display instead of
-suppressing buildx output and showing only the result.
+`src/build/buildx.go` — `BuildWithLayers()` injects `--progress=plain`, captures stderr
+via `io.MultiWriter` (preserves error output while parsing), returns `[]LayerEvent`.
 
-### Target output
-```
-    ── Build ───────────────────────────────────────── 1m32.6s ──
-    │ base    golang:1.25-alpine                     pulled   3.2s
-    │ base    alpine:3.21                            cached
-    │ COPY    go.mod go.sum ./                       cached
-    │ RUN     go mod download                        cached
-    │ COPY    . .                                    0.4s
-    │ RUN     go build -ldflags ... -o /stagefreight 44.8s
-    │ COPY    --from=build /stagefreight /usr/bin/   cached
-    │ COPY    --from=build /etc/ssl/certs/ ...       cached
-    ├─────────────────────────────────────────────────────────────
-    │ result  stagefreight:dev-07dfdf4               72.4 MB
-    └─────────────────────────────────────────────────────────────
-```
+`src/cli/cmd/docker_build.go` — CI mode uses `BuildWithLayers`, renders per-layer rows
+with `base`/`FROM`/`COPY`/`RUN` labels, timing/cached status, separator before results.
+Non-CI mode keeps raw buildx output (unmodified).
 
-### Parsing strategy
-
-Buildx `--progress=plain` output uses `#N [stage M/N] INSTRUCTION` format:
-```
-#9  [builder 1/7] FROM docker.io/library/golang:1.25-alpine@sha256:...
-#13 [builder 2/7] RUN apk add --no-cache git
-#16 [builder 4/7] COPY go.mod go.sum* ./
-#20 [builder 7/7] RUN CGO_ENABLED=0 go build ...
-#20 DONE 44.8s
-```
-
-Key patterns to match:
-- `#N [stage M/N] FROM image@sha256:...` → base image pull (extract image name, track pull vs cached)
-- `#N [stage M/N] COPY ...` → COPY layer
-- `#N [stage M/N] RUN ...` → RUN layer (truncate long commands)
-- `#N DONE Ns` → layer completion time
-- `#N CACHED` → cache hit
-- `exporting to image` / `writing image sha256:...` → result
-
-**Implementation:**
-- Intercept buildx stdout/stderr as a streaming `io.Reader`
-- Parse lines in real-time, emit section rows as layers complete
-- Track per-layer state: instruction, start time, cached flag
-- Final `result` line needs image name + size (from `docker inspect` after load)
-
-**Files to modify/create:**
-- `src/build/buildx.go` — streaming output parser, `LayerProgress` type
-- `src/build/parser.go` (NEW) — buildx output line parser with regex patterns
-- `src/cli/cmd/docker_build.go` — wire streaming parser into build section
-
-### Color in build streaming
-- Section headers: dim cyan (already done)
+### TODO: Color in build streaming
 - `cached`: gray (`\033[90m`)
 - Layer timing: default
 - `result`: bold
@@ -337,5 +296,5 @@ area carries live pipeline context.
 11. **Narrator CLI** — DONE (`narrator compose` ad-hoc + `narrator run` config-driven)
 12. **Docker Hub API templates** — DONE (`{docker.*}` in `docker_hub.go` + lazy fetch)
 13. **Component templates** — `{component.*}` (needs GitLab API client)
-14. **Build streaming** — parse buildx output for layer-by-layer progress (hardest piece)
+14. **Build streaming** — DONE (post-build parse via `BuildWithLayers` + `ParseBuildxOutput`)
 15. **Banner** — chafa rendering + clapperboard text splicing
