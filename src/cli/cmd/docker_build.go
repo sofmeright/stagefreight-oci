@@ -250,7 +250,6 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 		stepResult, err := bx.Build(ctx, step)
 		result.Steps = append(result.Steps, *stepResult)
 		if err != nil {
-			buildElapsed := time.Since(buildStart)
 			if ci && !verbose {
 				if buf, ok := bx.Stderr.(*bytes.Buffer); ok && buf.Len() > 0 {
 					fmt.Fprint(w, buf.String())
