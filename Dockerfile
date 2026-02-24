@@ -31,6 +31,7 @@ LABEL maintainer="SoFMeRight <sofmeright@gmail.com>" \
 
 # Runtime dependencies — only what stagefreight actually shells out to.
 RUN apk add --no-cache \
+      chafa \
       docker-cli \
       git \
       tree
