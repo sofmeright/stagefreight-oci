@@ -54,14 +54,23 @@ import (
 //
 //	Time variables:
 //	  {date}               → "2026-02-24" (ISO date, UTC)
+//	  {date:FORMAT}        → custom Go time layout (e.g. {date:20060102}, {date:Jan 2, 2006})
 //	  {datetime}           → "2026-02-24T15:04:05Z" (RFC3339)
 //	  {timestamp}          → "1740412800" (unix epoch)
+//	  {commit.date}        → "2026-02-24" (HEAD commit author date, UTC)
 //
 //	CI context variables (portable across GitLab/GitHub/Jenkins/Bitbucket):
 //	  {ci.pipeline}        → pipeline/run ID
 //	  {ci.runner}          → runner/agent name
 //	  {ci.job}             → job name
 //	  {ci.url}             → link to pipeline/run
+//
+//	Project metadata (auto-detected from git/filesystem):
+//	  {project.name}       → repo name from git remote origin
+//	  {project.url}        → repo URL (SSH remotes converted to HTTPS)
+//	  {project.license}    → SPDX identifier from LICENSE file
+//	  {project.language}   → auto-detected from lockfiles (go, rust, node, etc.)
+//	  {project.description} → from SetProjectDescription (config-sourced)
 //
 //	Literals pass through as-is:
 //	  "latest"           → "latest"
@@ -91,6 +100,8 @@ func ResolveTemplateWithDir(tmpl string, v *VersionInfo, rootDir string) string 
 	// These need git access so they require rootDir.
 	if rootDir != "" {
 		s = resolveScopedVersions(s, rootDir)
+		s = resolveCommitDate(s, rootDir)
+		s = resolveProjectMeta(s, rootDir)
 	}
 
 	// Resolve parameterized templates (they contain colons that
@@ -324,13 +335,96 @@ func resolveScopedVersions(s string, rootDir string) string {
 }
 
 // resolveTime replaces time-related templates.
+// Order matters: {date:FORMAT} and {datetime} must resolve before plain {date}
+// because {date} is a substring of both and ReplaceAll would clobber them.
 func resolveTime(s string) string {
 	now := time.Now().UTC()
 
-	s = strings.ReplaceAll(s, "{date}", now.Format("2006-01-02"))
+	// Parameterized date format first: {date:FORMAT} → custom Go time layout
+	s = resolveDateFormat(s, now)
+
+	// Longer tokens before shorter to avoid substring collision
 	s = strings.ReplaceAll(s, "{datetime}", now.Format(time.RFC3339))
 	s = strings.ReplaceAll(s, "{timestamp}", strconv.FormatInt(now.Unix(), 10))
+	s = strings.ReplaceAll(s, "{date}", now.Format("2006-01-02"))
 
+	return s
+}
+
+// resolveDateFormat replaces {date:FORMAT} with the current time formatted
+// using FORMAT as a Go time layout string.
+// Examples: {date:20060102} → "20260224", {date:Jan 2, 2006} → "Feb 24, 2026"
+func resolveDateFormat(s string, now time.Time) string {
+	for {
+		start := strings.Index(s, "{date:")
+		if start == -1 {
+			return s
+		}
+		// Make sure this isn't {datetime} (no colon after "date")
+		if strings.HasPrefix(s[start:], "{datetime}") {
+			// Skip past {datetime} and keep looking
+			next := strings.Index(s[start+10:], "{date:")
+			if next == -1 {
+				return s
+			}
+			// Rebuild search from after {datetime}
+			prefix := s[:start+10]
+			rest := resolveDateFormat(s[start+10:], now)
+			return prefix + rest
+		}
+		end := strings.Index(s[start:], "}")
+		if end == -1 {
+			return s
+		}
+		end += start
+		layout := s[start+6 : end]
+		if layout == "" {
+			break
+		}
+		s = s[:start] + now.Format(layout) + s[end+1:]
+	}
+	return s
+}
+
+// resolveCommitDate replaces {commit.date} with the HEAD commit author date (UTC, YYYY-MM-DD).
+func resolveCommitDate(s string, rootDir string) string {
+	if !strings.Contains(s, "{commit.date}") {
+		return s
+	}
+	dateStr, err := gitCmd(rootDir, "log", "-1", "--format=%aI", "HEAD")
+	if err != nil {
+		return strings.ReplaceAll(s, "{commit.date}", "")
+	}
+	// Parse ISO 8601 date and format as YYYY-MM-DD
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(dateStr))
+	if err != nil {
+		// Try alternative ISO format (some git versions use +00:00 instead of Z)
+		t, err = time.Parse("2006-01-02T15:04:05-07:00", strings.TrimSpace(dateStr))
+		if err != nil {
+			// Fallback: take first 10 chars (YYYY-MM-DD) if available
+			if len(dateStr) >= 10 {
+				return strings.ReplaceAll(s, "{commit.date}", dateStr[:10])
+			}
+			return strings.ReplaceAll(s, "{commit.date}", dateStr)
+		}
+	}
+	return strings.ReplaceAll(s, "{commit.date}", t.UTC().Format("2006-01-02"))
+}
+
+// resolveProjectMeta replaces {project.*} templates with auto-detected project metadata.
+// Name, URL, and language are detected from git and filesystem.
+// License is detected from LICENSE file content.
+// Description uses the value set by SetProjectDescription (typically from config).
+func resolveProjectMeta(s string, rootDir string) string {
+	if !strings.Contains(s, "{project.") {
+		return s
+	}
+	pm := DetectProject(rootDir)
+	s = strings.ReplaceAll(s, "{project.name}", pm.Name)
+	s = strings.ReplaceAll(s, "{project.url}", pm.URL)
+	s = strings.ReplaceAll(s, "{project.license}", pm.License)
+	s = strings.ReplaceAll(s, "{project.language}", pm.Language)
+	s = strings.ReplaceAll(s, "{project.description}", projectDescription)
 	return s
 }
 

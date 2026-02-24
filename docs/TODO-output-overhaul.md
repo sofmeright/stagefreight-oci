@@ -46,64 +46,30 @@ Portable env var mapping: GitLab, GitHub Actions, Jenkins, Bitbucket.
 
 ---
 
-## 7. Badges Section in Build Pipeline
+## 7. Badges Section in Build Pipeline — DONE
 
-**Status: TODO**
-
-The mockup shows a `── Badges ──` section as part of `docker build` pipeline output.
-Currently badge generation runs as a separate CI stage — it needs to also be wirable
-as an inline phase in the build pipeline.
-
-```
-    ── Badges ──────────────────────────────────────────── 4ms ──
-    │ release         .badges/release.svg    monofur  11pt  #74ecbe
-    │ build           .badges/build.svg      monofur  11pt  auto
-    │ license         .badges/license.svg    monofur  11pt  #310937
-    │ updated         .badges/updated.svg    dejavu   11pt  #236144
-    └─────────────────────────────────────────────────────────────
-```
-
-**Implementation:**
-- Add `runBadgeSection()` to `docker_build.go` — calls badge engine, emits section rows
-- `badge_generate.go` output should use section format (currently plain `fmt.Printf`)
-- Summary line: `badges ✓ 4 generated`
-
-**Files to modify:**
-- `src/cli/cmd/docker_build.go` — add badge phase between push and readme
-- `src/cli/cmd/badge_generate.go` — section-formatted output
+`runBadgeSection()` in `docker_build.go` — generates all configured badges inline,
+emits section rows with name/output/font/size/color. Runs between push and readme.
+Summary row: `badges ✓ N generated`.
 
 ---
 
 ## 8. Remaining Template Variables
 
-**Status: TODO**
+### `{date:FORMAT}` — custom date formatting — DONE
+`resolveDateFormat()` in `template.go`. Go time layout string (e.g. `{date:20060102}`).
+Also fixed pre-existing bug: `{date}` replacement was clobbering `{datetime}` (substring match).
 
-### `{date:FORMAT}` — custom date formatting
-Currently `{date}` is hardcoded to `2006-01-02`. Need `{date:FORMAT}` where FORMAT
-is a Go time layout string (e.g. `{date:Jan 2 2006}`, `{date:20060102}`).
+### `{commit.date}` — HEAD commit date — DONE
+`resolveCommitDate()` in `template.go`. Uses `git log -1 --format=%aI HEAD`.
+Requires rootDir, called from `ResolveTemplateWithDir` when rootDir is available.
 
-**File:** `src/gitver/template.go` — extend `resolveTime()` to parse `{date:...}`.
-
-### `{commit.date}` — HEAD commit date
-Date of the HEAD commit (not current time). Needs `git log -1 --format=%aI HEAD`.
-
-**File:** `src/gitver/template.go` — new resolver, needs rootDir for git call.
-
-### Project metadata (Config/Git tier)
-```
-{project.name}            → repo name (from git remote or config)
-{project.url}             → repo URL (from git remote or config)
-{project.license}         → SPDX identifier (LICENSE file detection)
-{project.description}     → from .stagefreight.yml description field
-{project.language}        → auto-detected (reuse build detect logic)
-```
-
-These are Config or Git tier (no network I/O), not API tier.
-
-**Files:**
-- `src/gitver/template.go` — `resolveProjectMeta()` resolver
-- `src/gitver/project.go` (NEW) — git remote parsing, LICENSE detection, language detection
-- `src/config/config.go` — may need `Project` section for description override
+### Project metadata (Config/Git tier) — DONE
+`src/gitver/project.go` — `DetectProject(rootDir)`, `repoNameFromRemote()`, `remoteToHTTPS()`,
+`detectLicense()` (SPDX matching), `detectLanguage()`.
+`resolveProjectMeta()` in `template.go` — auto-detects name/url/license/language from git+fs.
+`{project.description}` sourced via `SetProjectDescription()` (called from `docker_build.go`
+with `docker.readme.description` config value).
 
 ### Docker/Registry (API tier)
 ```
@@ -137,46 +103,16 @@ Resolves against the first `docker.io` registry in config.
 
 ---
 
-## 9. Narrator CLI Command
+## 9. Narrator CLI — DONE
 
-**Status: TODO**
+Two commands:
+- `narrator compose` — ad-hoc shell mode, type:value item pairs with placement flags
+- `narrator run` — config-driven, reads `narrator.files` config and processes all sections
 
-The narrator package (`src/narrator/`) exists with modules (Badge, Shield, Text, Break),
-composition logic (`Compose`, `ComposeRows`), and full config support (`NarratorConfig`,
-`NarratorSection`, `NarratorItem`, placement system). But there's no standalone CLI command.
+Both resolve templates, build narrator modules (badge/shield/text/break), compose via
+`narrator.Compose()`, and place via `PlaceContent()` with idempotent section replacement.
 
-### `stagefreight narrator compose`
-
-Reads `narrator:` config, resolves templates in values, composes modules per section,
-and injects/updates `<!-- sf:<name> -->` managed sections in target files.
-
-```yaml
-narrator:
-  link_base: "https://github.com/sofmeright/stagefreight/blob/main"
-  files:
-    - path: README.md
-      sections:
-        - name: badges
-          placement: top
-          items:
-            - badge: release
-              file: ".badges/release.svg"
-              link: "https://github.com/sofmeright/stagefreight/releases"
-            - shield: "docker/pulls/prplanit/stagefreight"
-              link: "https://hub.docker.com/r/prplanit/stagefreight"
-```
-
-**Implementation:**
-- `src/cli/cmd/narrator.go` (NEW) — parent command
-- `src/cli/cmd/narrator_compose.go` (NEW) — compose subcommand
-  - Load config, detect version for template resolution
-  - For each file: read content, compose each section, place via `PlaceContent()`
-  - Write back (or `--dry-run` to stdout)
-- Narrator compose should also be callable from `docker_build.go` pipeline as a phase
-
-**Files:**
-- `src/cli/cmd/narrator.go` (NEW)
-- `src/cli/cmd/narrator_compose.go` (NEW)
+Files: `narrator.go`, `narrator_compose.go`, `narrator_run.go`
 
 ---
 
@@ -370,18 +306,18 @@ area carries live pipeline context.
 | `{ci.runner}` | Static | Runner/agent name (portable) |
 | `{ci.job}` | Static | Job name (portable) |
 | `{ci.url}` | Static | Pipeline URL (portable) |
+| `{date:FORMAT}` | Static | Custom Go time layout |
+| `{commit.date}` | Git | HEAD commit date |
+| `{project.name}` | Git | Repo name from git remote |
+| `{project.url}` | Git | Repo URL (SSH→HTTPS conversion) |
+| `{project.license}` | Filesystem | SPDX identifier from LICENSE |
+| `{project.description}` | Config | From SetProjectDescription |
+| `{project.language}` | Filesystem | Auto-detected from lockfiles |
 
 ### TODO
 
 | Template | Tier | Description |
 |----------|------|-------------|
-| `{date:FORMAT}` | Static | Custom Go time layout |
-| `{commit.date}` | Git | HEAD commit date |
-| `{project.name}` | Config/Git | Repo name |
-| `{project.url}` | Config/Git | Repo URL |
-| `{project.license}` | Config | SPDX identifier |
-| `{project.description}` | Config | From config |
-| `{project.language}` | Config | Auto-detected |
 | `{docker.pulls}` | API | Pull count (formatted) |
 | `{docker.pulls:raw}` | API | Pull count (raw) |
 | `{docker.stars}` | API | Star count |
@@ -404,10 +340,10 @@ area carries live pipeline context.
 5. **Phase sections** — DONE (detect/plan/build/push/readme/retention/summary)
 6. **Scoped versions** — DONE (`DetectScopedVersion` + template parser)
 7. **Static templates** — DONE (date/time, ci.* in `template.go`)
-8. **Badges in pipeline** — add `── Badges ──` section to `docker build` output
-9. **`{date:FORMAT}` + `{commit.date}`** — extend `resolveTime()`, add git date resolver
-10. **Project metadata templates** — `{project.*}` (Config/Git tier, no network)
-11. **Narrator CLI** — `stagefreight narrator compose` command
+8. **Badges in pipeline** — DONE (`runBadgeSection` in `docker_build.go`)
+9. **`{date:FORMAT}` + `{commit.date}`** — DONE (`resolveDateFormat`, `resolveCommitDate`, `{datetime}` bug fix)
+10. **Project metadata templates** — DONE (`{project.*}` in `project.go` + `resolveProjectMeta`)
+11. **Narrator CLI** — DONE (`narrator compose` ad-hoc + `narrator run` config-driven)
 12. **API templates** — `{docker.*}`, `{component.*}` (needs provider interface + HTTP clients)
 13. **Build streaming** — parse buildx output for layer-by-layer progress (hardest piece)
 14. **Banner** — chafa rendering + clapperboard text splicing

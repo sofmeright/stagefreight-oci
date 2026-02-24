@@ -6,14 +6,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/sofmeright/stagefreight/src/badge"
 	"github.com/sofmeright/stagefreight/src/build"
 	_ "github.com/sofmeright/stagefreight/src/build/engines"
 	"github.com/sofmeright/stagefreight/src/config"
+	"github.com/sofmeright/stagefreight/src/gitver"
 	"github.com/sofmeright/stagefreight/src/lint"
 	"github.com/sofmeright/stagefreight/src/lint/modules"
 	"github.com/sofmeright/stagefreight/src/output"
@@ -65,6 +68,11 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 	w := os.Stdout
 	pipelineStart := time.Now()
 
+	// Inject project description from config for {project.description} templates
+	if cfg.Docker.Readme.Description != "" {
+		gitver.SetProjectDescription(cfg.Docker.Readme.Description)
+	}
+
 	// Pipeline context block
 	output.ContextBlock(w, buildContextKV())
 
@@ -101,7 +109,7 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 
 	detectSec := output.NewSection(w, "Detect", detectElapsed, color)
 	for _, df := range det.Dockerfiles {
-		detectSec.Row("%-16s→ %s", "Dockerfile", df)
+		detectSec.Row("%-16s→ %s", "Dockerfile", df.Path)
 	}
 	detectSec.Row("%-16s→ %s (auto-detected)", "language", det.Language)
 	detectSec.Row("%-16s→ %s", "context", ".")
@@ -311,6 +319,12 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 		output.SectionEnd(w, "sf_push")
 	}
 
+	// --- Badges ---
+	var badgeSummary string
+	if len(cfg.Badges.Items) > 0 {
+		badgeSummary, _ = runBadgeSection(w, color, rootDir)
+	}
+
 	// --- README Sync ---
 	var readmeSummary string
 	if cfg.Docker.Readme.IsActive() && !dbLocal {
@@ -348,6 +362,11 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 	// Push
 	if pushSummary != "" {
 		output.SummaryRow(w, "push", "success", pushSummary, color)
+	}
+
+	// Badges
+	if badgeSummary != "" {
+		output.SummaryRow(w, "badges", "success", badgeSummary, color)
 	}
 
 	// Readme
@@ -629,6 +648,104 @@ func buildContextKV() []output.KV {
 	}
 
 	return kv
+}
+
+// runBadgeSection generates configured badges with section-formatted output.
+func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Duration) {
+	bcfg := cfg.Badges
+	output.SectionStartCollapsed(w, "sf_badges", "Badges")
+	start := time.Now()
+
+	eng, err := buildBadgeEngine()
+	if err != nil {
+		elapsed := time.Since(start)
+		sec := output.NewSection(w, "Badges", elapsed, color)
+		sec.Row("error: %v", err)
+		sec.Close()
+		output.SectionEnd(w, "sf_badges")
+		return fmt.Sprintf("error: %v", err), elapsed
+	}
+
+	// Detect version for template resolution
+	vi, _ := build.DetectVersion(rootDir)
+
+	var generated int
+	for _, item := range bcfg.Items {
+		// Per-item engine if font is overridden
+		itemEng := eng
+		if item.Font != "" || item.FontFile != "" || item.FontSize != 0 {
+			override, oErr := buildItemEngine(item, bcfg)
+			if oErr != nil {
+				continue
+			}
+			itemEng = override
+		}
+
+		// Resolve value templates
+		value := item.Value
+		if vi != nil && value != "" {
+			value = gitver.ResolveTemplateWithDir(value, vi, rootDir)
+		}
+
+		// Resolve color
+		badgeColor := item.Color
+		if badgeColor == "" || badgeColor == "auto" {
+			badgeColor = badge.StatusColor("passed")
+		}
+
+		// Resolve output path
+		outPath := item.Output
+		if outPath == "" {
+			outPath = fmt.Sprintf(".badges/%s.svg", item.Name)
+		}
+
+		svg := itemEng.Generate(badge.Badge{
+			Label: item.Label,
+			Value: value,
+			Color: badgeColor,
+		})
+
+		if mkErr := os.MkdirAll(filepath.Dir(outPath), 0o755); mkErr != nil {
+			continue
+		}
+		if wErr := os.WriteFile(outPath, []byte(svg), 0o644); wErr != nil {
+			continue
+		}
+		generated++
+	}
+
+	elapsed := time.Since(start)
+	sec := output.NewSection(w, "Badges", elapsed, color)
+	for _, item := range bcfg.Items {
+		fontName := item.Font
+		if fontName == "" {
+			fontName = bcfg.Font
+		}
+		if fontName == "" {
+			fontName = "dejavu-sans"
+		}
+		size := item.FontSize
+		if size == 0 {
+			size = bcfg.FontSize
+		}
+		if size == 0 {
+			size = 11
+		}
+		badgeColor := item.Color
+		if badgeColor == "" {
+			badgeColor = "auto"
+		}
+		outPath := item.Output
+		if outPath == "" {
+			outPath = fmt.Sprintf(".badges/%s.svg", item.Name)
+		}
+		sec.Row("%-16s%-24s %-8s %.0fpt  %s", item.Name, outPath, fontName, size, badgeColor)
+	}
+	sec.Close()
+	output.SectionEnd(w, "sf_badges")
+
+	summary := fmt.Sprintf("%d generated", generated)
+	return summary, elapsed
 }
 
 // runReadmeSyncSection wraps readme sync with section-formatted output.
