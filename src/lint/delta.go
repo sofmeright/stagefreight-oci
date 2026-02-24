@@ -124,9 +124,17 @@ func (d *Delta) branchChanges(repo *git.Repository) (map[string]bool, error) {
 		return nil, fmt.Errorf("getting target commit: %w", err)
 	}
 
-	// If HEAD is the same as target, no branch-level changes
+	// If HEAD is the same as target (e.g., push to main), fall back to
+	// diffing HEAD vs its parent so the latest commit's changes get linted.
 	if headCommit.Hash == targetCommit.Hash {
-		return nil, nil
+		if headCommit.NumParents() == 0 {
+			return nil, nil // initial commit — nothing to diff
+		}
+		parent, err := headCommit.Parent(0)
+		if err != nil {
+			return nil, nil
+		}
+		targetCommit = parent
 	}
 
 	headTree, err := headCommit.Tree()
