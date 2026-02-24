@@ -39,7 +39,7 @@ Items are specified as type:value pairs with optional comma-separated fields:
 
 Examples:
   stagefreight narrator compose -f README.md -s badges \
-    badge:release,file:.badges/release.svg,link:https://github.com/myorg/myrepo/releases \
+    badge:release,file:.stagefreight/badges/release.svg,link:https://github.com/myorg/myrepo/releases \
     shield:docker/pulls/myorg/myrepo,link:https://hub.docker.com/r/myorg/myrepo
 
   stagefreight narrator compose -f README.md --plain \
@@ -181,7 +181,7 @@ func placeWrapped(content, wrapped, position, sectionAnchor, matchPattern string
 	}
 }
 
-// parseCLIItems converts CLI arguments like "badge:release,file:.badges/release.svg,link:..."
+// parseCLIItems converts CLI arguments like "badge:release,file:.stagefreight/badges/release.svg,link:..."
 // into NarratorItem config entries.
 func parseCLIItems(args []string) ([]config.NarratorItem, error) {
 	var items []config.NarratorItem
@@ -201,7 +201,7 @@ func parseCLIItems(args []string) ([]config.NarratorItem, error) {
 // Format: type:value[,field:value,...]
 // Examples:
 //
-//	badge:release,file:.badges/release.svg,link:https://example.com
+//	badge:release,file:.stagefreight/badges/release.svg,link:https://example.com
 //	shield:docker/pulls/myorg/myrepo,link:https://hub.docker.com
 //	text:Hello World
 //	break:

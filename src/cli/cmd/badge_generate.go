@@ -36,7 +36,7 @@ func init() {
 	badgeGenerateCmd.Flags().StringVar(&bgValue, "value", "", "ad-hoc badge value (right side)")
 	badgeGenerateCmd.Flags().StringVar(&bgColor, "color", "#4c1", "ad-hoc badge color (hex)")
 	badgeGenerateCmd.Flags().StringVar(&bgStatus, "status", "", "status-driven color: passed, warning, critical")
-	badgeGenerateCmd.Flags().StringVar(&bgOutput, "output", ".badges/custom.svg", "output file path")
+	badgeGenerateCmd.Flags().StringVar(&bgOutput, "output", ".stagefreight/badges/custom.svg", "output file path")
 
 	badgeCmd.AddCommand(badgeGenerateCmd)
 }
@@ -184,7 +184,7 @@ func generateConfigBadges(eng *badge.Engine, names []string) error {
 		// Resolve output path
 		output := item.Output
 		if output == "" {
-			output = fmt.Sprintf(".badges/%s.svg", item.Name)
+			output = fmt.Sprintf(".stagefreight/badges/%s.svg", item.Name)
 		}
 
 		svg := itemEng.Generate(badge.Badge{

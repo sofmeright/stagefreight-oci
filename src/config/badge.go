@@ -14,7 +14,7 @@ type BadgeItemConfig struct {
 	Label    string  `yaml:"label"`     // left side text
 	Value    string  `yaml:"value"`     // right side text (supports {version} etc. templates)
 	Color    string  `yaml:"color"`     // hex color or "auto" (status-driven, default)
-	Output   string  `yaml:"output"`    // file path (default: .badges/<name>.svg)
+	Output   string  `yaml:"output"`    // file path (default: .stagefreight/badges/<name>.svg)
 	Font     string  `yaml:"font"`      // per-badge font override (built-in name)
 	FontSize float64 `yaml:"font_size"` // per-badge font size override
 	FontFile string  `yaml:"font_file"` // per-badge custom font file override

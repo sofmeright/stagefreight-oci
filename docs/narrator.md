@@ -182,7 +182,7 @@ Renders a markdown badge image, optionally wrapped in a link.
 
 ```yaml
 - badge: release
-  file: ".badges/release.svg"
+  file: ".stagefreight/badges/release.svg"
   link: "https://github.com/myorg/myrepo/releases"
 ```
 
@@ -318,7 +318,7 @@ badges:
       label: release
       value: "{version}"         # gitver templates: {version}, {major}.{minor}, {sha:7}
       color: auto                # auto = status-driven, or hex "#4c1"
-      output: .badges/release.svg
+      output: .stagefreight/badges/release.svg
       # uses global font defaults
 
     - name: license
@@ -327,14 +327,14 @@ badges:
       color: "#007ec6"
       font: monofur              # per-badge font override
       font_size: 13              # per-badge size override
-      output: .badges/license.svg
+      output: .stagefreight/badges/license.svg
 
     - name: fancy
       label: built with
       value: "stagefreight"
       color: "#8a2be2"
       font_file: ./fonts/Custom.ttf  # per-badge custom file
-      output: .badges/fancy.svg
+      output: .stagefreight/badges/fancy.svg
 ```
 
 ### Built-In Fonts
@@ -355,12 +355,12 @@ badges:
       label: release
       value: "{version}"
       color: auto
-      output: .badges/release.svg
+      output: .stagefreight/badges/release.svg
     - name: license
       label: license
       value: "AGPL-3.0"
       color: "#007ec6"
-      output: .badges/license.svg
+      output: .stagefreight/badges/license.svg
 
 # Narrator composition (top-level)
 narrator:
@@ -374,10 +374,10 @@ narrator:
           placement: top
           items:
             - badge: release
-              file: ".badges/release.svg"
+              file: ".stagefreight/badges/release.svg"
               link: "https://github.com/myorg/myrepo/releases"
             - badge: license
-              file: ".badges/license.svg"
+              file: ".stagefreight/badges/license.svg"
               link: LICENSE
             - shield: docker/pulls/prplanit/stagefreight
               link: "https://hub.docker.com/r/prplanit/stagefreight"
@@ -420,10 +420,10 @@ docker:
     link_base: "https://github.com/myorg/myrepo/blob/main"
     badges:
       - alt: release
-        file: ".badges/release.svg"
+        file: ".stagefreight/badges/release.svg"
         link: "https://github.com/myorg/myrepo/releases"
       - alt: license
-        file: ".badges/license.svg"
+        file: ".stagefreight/badges/license.svg"
         link: LICENSE
       - alt: pulls
         url: "https://img.shields.io/docker/pulls/myorg/myrepo"
@@ -440,8 +440,8 @@ The narrator can be driven entirely from the shell, enabling template-based READ
 ```bash
 # Compose badges into a section
 stagefreight narrator compose -f README.md -s badges \
-  badge:release,file:.badges/release.svg,link:https://github.com/myorg/myrepo/releases \
-  badge:license,file:.badges/license.svg,link:LICENSE \
+  badge:release,file:.stagefreight/badges/release.svg,link:https://github.com/myorg/myrepo/releases \
+  badge:license,file:.stagefreight/badges/license.svg,link:LICENSE \
   break: \
   shield:docker/pulls/myorg/myrepo,link:https://hub.docker.com/r/myorg/myrepo
 

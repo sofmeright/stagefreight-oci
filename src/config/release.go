@@ -41,7 +41,7 @@ type ReleaseConfig struct {
 // BadgeConfig controls the release status badge.
 type BadgeConfig struct {
 	Enabled bool   `yaml:"enabled"` // commit badge SVG to repo (default: true)
-	Path    string `yaml:"path"`    // repo path for badge file (default: .badges/release.svg)
+	Path    string `yaml:"path"`    // repo path for badge file (default: .stagefreight/badges/release.svg)
 	Branch  string `yaml:"branch"`  // branch to commit badge to (default: main)
 }
 
@@ -94,7 +94,7 @@ func DefaultReleaseConfig() ReleaseConfig {
 	return ReleaseConfig{
 		Badge: BadgeConfig{
 			Enabled: true,
-			Path:    ".badges/release.svg",
+			Path:    ".stagefreight/badges/release.svg",
 			Branch:  "main",
 		},
 	}

@@ -1,1 +1,2 @@
-.stagefreight/
+.stagefreight/*
+!.stagefreight/badges/

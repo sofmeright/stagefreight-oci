@@ -73,6 +73,13 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 		gitver.SetProjectDescription(cfg.Docker.Readme.Description)
 	}
 
+	// Banner — detect version early for display
+	bannerInfo := output.BannerInfo{}
+	if vi, verr := build.DetectVersion(rootDir); verr == nil && vi != nil {
+		bannerInfo = output.NewBannerInfo(vi.Version, vi.SHA, vi.Branch)
+	}
+	output.Banner(w, bannerInfo, color)
+
 	// Pipeline context block
 	output.ContextBlock(w, buildContextKV())
 
@@ -744,7 +751,7 @@ func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Dura
 		// Resolve output path
 		outPath := item.Output
 		if outPath == "" {
-			outPath = fmt.Sprintf(".badges/%s.svg", item.Name)
+			outPath = fmt.Sprintf(".stagefreight/badges/%s.svg", item.Name)
 		}
 
 		svg := itemEng.Generate(badge.Badge{
@@ -785,7 +792,7 @@ func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Dura
 		}
 		outPath := item.Output
 		if outPath == "" {
-			outPath = fmt.Sprintf(".badges/%s.svg", item.Name)
+			outPath = fmt.Sprintf(".stagefreight/badges/%s.svg", item.Name)
 		}
 		sec.Row("%-16s%-24s %-8s %.0fpt  %s", item.Name, outPath, fontName, size, badgeColor)
 	}

@@ -7,24 +7,24 @@ badges:
     - name: release
       label: release
       color: "#74ecbe"
-      output: .badges/release.svg
+      output: .stagefreight/badges/release.svg
     - name: build
       label: build
       value: "{env:BUILD_STATUS}"
       color: auto
       font: monofur
-      output: .badges/build.svg
+      output: .stagefreight/badges/build.svg
     - name: license
       label: license
       value: "AGPL-3.0+"
       color: "#310937"
       font: monofur
-      output: .badges/license.svg
+      output: .stagefreight/badges/license.svg
     - name: updated
       label: updated
       value: "{env:BUILD_DATE}"
       color: "#236144"
-      output: .badges/updated.svg
+      output: .stagefreight/badges/updated.svg
 
 docker:
   readme:
@@ -32,16 +32,16 @@ docker:
     link_base: "https://github.com/sofmeright/stagefreight/blob/main"
     badges:
       - alt: release
-        file: ".badges/release.svg"
+        file: ".stagefreight/badges/release.svg"
         link: "https://github.com/sofmeright/stagefreight/releases"
       - alt: build
-        file: ".badges/build.svg"
+        file: ".stagefreight/badges/build.svg"
         link: "https://github.com/sofmeright/stagefreight/actions"
       - alt: license
-        file: ".badges/license.svg"
+        file: ".stagefreight/badges/license.svg"
         link: LICENSE
       - alt: updated
-        file: ".badges/updated.svg"
+        file: ".stagefreight/badges/updated.svg"
       - alt: pulls
         url: "https://img.shields.io/docker/pulls/prplanit/stagefreight"
         link: "https://hub.docker.com/r/prplanit/stagefreight"
