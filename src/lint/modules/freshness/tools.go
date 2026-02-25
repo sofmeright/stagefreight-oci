@@ -47,7 +47,7 @@ func (m *freshnessModule) checkTools(ctx context.Context, file lint.FileInfo, to
 		}
 
 		if release.TagName != "" {
-			dep.Latest = release.TagName
+			dep.Latest = strings.TrimPrefix(release.TagName, "v")
 		}
 		deps = append(deps, dep)
 	}

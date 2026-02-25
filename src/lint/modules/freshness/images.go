@@ -13,8 +13,12 @@ type dockerHubTagsResponse struct {
 	Results []struct {
 		Name string `json:"name"`
 	} `json:"results"`
-	Next string `json:"next"`
+	Next *string `json:"next"`
 }
+
+// maxTagPages limits how many pages we fetch from Docker Hub to avoid
+// excessive API calls for images with thousands of tags.
+const maxTagPages = 10
 
 // checkImages resolves base image freshness for all FROM stages.
 func (m *freshnessModule) checkImages(ctx context.Context, file lint.FileInfo, stages []stageInfo) []Dependency {
@@ -67,15 +71,25 @@ func (m *freshnessModule) resolveImage(ctx context.Context, filePath string, sta
 	}
 	dep.SourceURL = url
 
-	var resp dockerHubTagsResponse
-	if err := m.http.fetchJSON(ctx, url, &resp, ep); err != nil {
-		// Network errors are non-fatal for freshness checks.
-		return dep
-	}
-
-	tags := make([]string, 0, len(resp.Results))
-	for _, r := range resp.Results {
-		tags = append(tags, r.Name)
+	var tags []string
+	pageURL := url
+	for page := 0; page < maxTagPages && pageURL != ""; page++ {
+		var resp dockerHubTagsResponse
+		if err := m.http.fetchJSON(ctx, pageURL, &resp, ep); err != nil {
+			if page == 0 {
+				// First page failed — network errors are non-fatal.
+				return dep
+			}
+			break
+		}
+		for _, r := range resp.Results {
+			tags = append(tags, r.Name)
+		}
+		if resp.Next != nil {
+			pageURL = *resp.Next
+		} else {
+			pageURL = ""
+		}
 	}
 
 	// Decompose current tag and find latest in same suffix family.
