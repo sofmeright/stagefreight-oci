@@ -83,6 +83,14 @@ docker:
       credentials: DOCKER
       retention: 6
 
+lint:
+  modules:
+    freshness:
+      enabled: true
+      options:
+        sources:
+          docker_images: true
+
 component:
   spec_files:
     - "templates/stagefreight.yml"
