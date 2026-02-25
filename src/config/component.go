@@ -15,20 +15,18 @@ type ComponentConfig struct {
 
 // ReadmeConfig controls README documentation injection.
 type ReadmeConfig struct {
-	File        string `yaml:"file"`         // target README file (default: README.md)
-	StartMarker string `yaml:"start_marker"` // injection start marker
-	EndMarker   string `yaml:"end_marker"`   // injection end marker
-	Branch      string `yaml:"branch"`       // branch to commit to (default: main)
+	File    string `yaml:"file"`    // target README file (default: README.md)
+	Section string `yaml:"section"` // sf:section name (default: "component-inputs")
+	Branch  string `yaml:"branch"`  // branch to commit to (default: main)
 }
 
 // DefaultComponentConfig returns sensible defaults for component management.
 func DefaultComponentConfig() ComponentConfig {
 	return ComponentConfig{
 		Readme: ReadmeConfig{
-			File:        "README.md",
-			StartMarker: "<!-- START_C_INPUTS_MAP -->",
-			EndMarker:   "<!-- END_C_INPUTS_MAP -->",
-			Branch:      "main",
+			File:    "README.md",
+			Section: "component-inputs",
+			Branch:  "main",
 		},
 		Catalog: true,
 	}

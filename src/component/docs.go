@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/sofmeright/stagefreight/src/registry"
 )
 
 // inputGroup is an ordered grouping of inputs for rendering.
@@ -98,34 +100,19 @@ func groupInputs(inputs []SpecInput) []inputGroup {
 	return groups
 }
 
-// InjectIntoReadme reads a README file and replaces content between the start
-// and end markers with the provided content. Returns the updated README text.
-func InjectIntoReadme(readmePath, startMarker, endMarker, content string) (string, error) {
+// InjectIntoReadme reads a README file and replaces the named sf:section
+// with the provided content. Returns the updated README text.
+func InjectIntoReadme(readmePath, section, content string) (string, error) {
 	data, err := os.ReadFile(readmePath)
 	if err != nil {
 		return "", fmt.Errorf("reading README: %w", err)
 	}
 
 	original := string(data)
-
-	startIdx := strings.Index(original, startMarker)
-	if startIdx == -1 {
-		return "", fmt.Errorf("start marker %q not found in %s", startMarker, readmePath)
+	updated, found := registry.ReplaceSection(original, section, content)
+	if !found {
+		return "", fmt.Errorf("section %q (markers <!-- sf:%s --> / <!-- /sf:%s -->) not found in %s",
+			section, section, section, readmePath)
 	}
-	endIdx := strings.Index(original, endMarker)
-	if endIdx == -1 {
-		return "", fmt.Errorf("end marker %q not found in %s", endMarker, readmePath)
-	}
-	if endIdx <= startIdx {
-		return "", fmt.Errorf("end marker appears before start marker in %s", readmePath)
-	}
-
-	// Build: everything up to and including start marker + newline + content + end marker + rest.
-	var b strings.Builder
-	b.WriteString(original[:startIdx+len(startMarker)])
-	b.WriteString("\n")
-	b.WriteString(content)
-	b.WriteString(original[endIdx:])
-
-	return b.String(), nil
+	return updated, nil
 }

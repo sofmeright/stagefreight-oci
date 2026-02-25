@@ -93,10 +93,9 @@ func runComponentDocs(cmd *cobra.Command, args []string) error {
 	}
 
 	if readmePath != "" {
-		startMarker := cfg.Component.Readme.StartMarker
-		endMarker := cfg.Component.Readme.EndMarker
+		section := cfg.Component.Readme.Section
 
-		updated, err := component.InjectIntoReadme(readmePath, startMarker, endMarker, docs)
+		updated, err := component.InjectIntoReadme(readmePath, section, docs)
 		if err != nil {
 			return fmt.Errorf("injecting into README: %w", err)
 		}
