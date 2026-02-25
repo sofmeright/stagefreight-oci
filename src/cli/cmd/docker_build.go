@@ -451,11 +451,13 @@ func runPreBuildLint(ctx context.Context, rootDir string, ci bool, color bool, w
 		return "", err
 	}
 
-	// Delta filtering
-	delta := &lint.Delta{RootDir: rootDir, Verbose: verbose}
-	changedSet, _ := delta.ChangedFiles(ctx)
-	if changedSet != nil {
-		files = lint.FilterByDelta(files, changedSet)
+	// Delta filtering — skip when config requests full scan.
+	if cfg.Lint.Level != config.LevelFull {
+		delta := &lint.Delta{RootDir: rootDir, Verbose: verbose}
+		changedSet, _ := delta.ChangedFiles(ctx)
+		if changedSet != nil {
+			files = lint.FilterByDelta(files, changedSet)
+		}
 	}
 
 	start := time.Now()

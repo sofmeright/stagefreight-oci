@@ -84,10 +84,12 @@ docker:
       retention: 6
 
 lint:
+  level: full
   modules:
     freshness:
       enabled: true
       options:
+        cache_ttl: 300
         sources:
           docker_images: true
           docker_tools: true

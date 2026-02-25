@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const engineVersion = "0.1.0"
@@ -21,6 +22,7 @@ type Cache struct {
 // cacheEntry stores cached findings for a file+module combination.
 type cacheEntry struct {
 	Findings []Finding `json:"findings"`
+	CachedAt int64     `json:"cached_at,omitempty"`
 }
 
 // ResolveCacheDir determines the cache directory using the following precedence:
@@ -72,7 +74,9 @@ func (c *Cache) Key(content []byte, moduleName string, configJSON string) string
 }
 
 // Get retrieves cached findings. Returns nil, false on cache miss.
-func (c *Cache) Get(key string) ([]Finding, bool) {
+// maxAge controls TTL: 0 means no expiry (content-only modules),
+// >0 expires entries older than the duration (external-state modules).
+func (c *Cache) Get(key string, maxAge time.Duration) ([]Finding, bool) {
 	if !c.Enabled {
 		return nil, false
 	}
@@ -85,7 +89,20 @@ func (c *Cache) Get(key string) ([]Finding, bool) {
 
 	var entry cacheEntry
 	if err := json.Unmarshal(data, &entry); err != nil {
+		os.Remove(path) // self-heal corrupted entries
 		return nil, false
+	}
+
+	// TTL check for external-state modules.
+	// Old entries without a timestamp (CachedAt==0) are treated as
+	// expired — prevents pre-TTL cache files from being served forever.
+	if maxAge > 0 {
+		if entry.CachedAt == 0 {
+			return nil, false
+		}
+		if time.Since(time.Unix(entry.CachedAt, 0)) > maxAge {
+			return nil, false
+		}
 	}
 
 	return entry.Findings, true
@@ -102,7 +119,7 @@ func (c *Cache) Put(key string, findings []Finding) error {
 		return fmt.Errorf("creating cache dir: %w", err)
 	}
 
-	entry := cacheEntry{Findings: findings}
+	entry := cacheEntry{Findings: findings, CachedAt: time.Now().Unix()}
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return err

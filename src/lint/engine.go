@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/sofmeright/stagefreight/src/config"
 )
@@ -143,22 +144,37 @@ func (e *Engine) RunWithStats(ctx context.Context, files []FileInfo) ([]Finding,
 				if e.Cache != nil && e.Cache.Enabled && data != nil {
 					cfgJSON := e.moduleConfigJSON(m.Name())
 					key := e.Cache.Key(data, m.Name(), cfgJSON)
-					if cached, ok := e.Cache.Get(key); ok {
-						e.CacheHits.Add(1)
-						mu.Lock()
-						modStats[idx].Files++
-						modStats[idx].Cached++
-						for _, f := range cached {
-							modStats[idx].Findings++
-							if f.Severity == SeverityCritical {
-								modStats[idx].Critical++
-							} else if f.Severity == SeverityWarning {
-								modStats[idx].Warnings++
-							}
+
+					// Resolve cache TTL: modules with external state
+					// declare a TTL; all others cache forever (maxAge=0).
+					var maxAge time.Duration
+					noCache := false
+					if tm, ok := m.(CacheTTLModule); ok {
+						maxAge = tm.CacheTTL()
+						if maxAge < 0 {
+							noCache = true // negative = never cache
+							maxAge = 0
 						}
-						findings = append(findings, cached...)
-						mu.Unlock()
-						return
+					}
+
+					if !noCache {
+						if cached, ok := e.Cache.Get(key, maxAge); ok {
+							e.CacheHits.Add(1)
+							mu.Lock()
+							modStats[idx].Files++
+							modStats[idx].Cached++
+							for _, f := range cached {
+								modStats[idx].Findings++
+								if f.Severity == SeverityCritical {
+									modStats[idx].Critical++
+								} else if f.Severity == SeverityWarning {
+									modStats[idx].Warnings++
+								}
+							}
+							findings = append(findings, cached...)
+							mu.Unlock()
+							return
+						}
 					}
 					e.CacheMisses.Add(1)
 
@@ -180,9 +196,12 @@ func (e *Engine) RunWithStats(ctx context.Context, files []FileInfo) ([]Finding,
 						}
 					}
 					findings = append(findings, results...)
-					// Cache even empty results (clean pass)
-					if cacheErr := e.Cache.Put(key, results); cacheErr != nil && e.Verbose {
-						fmt.Fprintf(os.Stderr, "cache: write failed for %s/%s: %v\n", m.Name(), f.Path, cacheErr)
+					// Cache even empty results (clean pass).
+					// Skip write for modules that opted out (TTL=0).
+					if !noCache {
+						if cacheErr := e.Cache.Put(key, results); cacheErr != nil && e.Verbose {
+							fmt.Fprintf(os.Stderr, "cache: write failed for %s/%s: %v\n", m.Name(), f.Path, cacheErr)
+						}
 					}
 					return
 				}

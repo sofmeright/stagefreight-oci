@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/sofmeright/stagefreight/src/lint"
 )
@@ -21,6 +22,10 @@ func newModule() *freshnessModule {
 
 func (m *freshnessModule) Name() string        { return "freshness" }
 func (m *freshnessModule) DefaultEnabled() bool { return true }
+
+// CacheTTL implements lint.CacheTTLModule. Freshness findings depend on
+// external registries and CVE feeds, so they expire after the configured TTL.
+func (m *freshnessModule) CacheTTL() time.Duration { return m.cfg.cacheTTL() }
 
 func (m *freshnessModule) AutoDetect() []string {
 	return []string{

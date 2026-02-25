@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Module is the interface every lint check implements.
@@ -21,6 +22,16 @@ type Module interface {
 type ConfigurableModule interface {
 	Module
 	Configure(opts map[string]any) error
+}
+
+// CacheTTLModule is implemented by modules whose findings depend on
+// external state (registries, CVE feeds) and should expire from cache.
+// Modules that don't implement this are cached forever by content hash.
+//   - Return >0 to cache with expiry (e.g. 5*time.Minute)
+//   - Return 0  to cache forever (same as not implementing the interface)
+//   - Return <0 to never cache (always re-run)
+type CacheTTLModule interface {
+	CacheTTL() time.Duration
 }
 
 var (

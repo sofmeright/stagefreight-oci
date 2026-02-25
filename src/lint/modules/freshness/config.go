@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"time"
 )
 
 // FreshnessConfig holds per-source toggles, severity mapping, package rules,
@@ -16,7 +17,8 @@ type FreshnessConfig struct {
 	Ignore        []string        `json:"ignore"`
 	PackageRules  []PackageRule   `json:"package_rules"`
 	Groups        []Group         `json:"groups"`
-	Timeout       int             `json:"timeout"` // HTTP timeout in seconds (default 10)
+	Timeout       int             `json:"timeout"`   // HTTP timeout in seconds (default 10)
+	CacheTTLSecs  int             `json:"cache_ttl"` // cache TTL in seconds (default 300; 0 = cache forever; <0 = never cache)
 }
 
 // VulnConfig controls vulnerability correlation via the OSV database.
@@ -156,8 +158,20 @@ func DefaultConfig() FreshnessConfig {
 		Vulnerability: VulnConfig{
 			MinSeverity: "moderate",
 		},
-		Timeout: 10,
+		Timeout:      10,
+		CacheTTLSecs: 300, // 5 minutes — aligns with registry mirror TTLs
 	}
+}
+
+// cacheTTL returns the cache TTL as a time.Duration.
+//   - >0 → cache with expiry (e.g. 300 → 5m)
+//   - 0  → cache forever (content-hash only)
+//   - <0 → never cache (always re-run)
+func (c *FreshnessConfig) cacheTTL() time.Duration {
+	if c.CacheTTLSecs < 0 {
+		return -1 // signal "never cache" to engine
+	}
+	return time.Duration(c.CacheTTLSecs) * time.Second
 }
 
 // vulnEnabled returns whether vulnerability correlation is active.

@@ -32,7 +32,7 @@ Modules run in parallel and results are cached by content hash.`,
 }
 
 func init() {
-	lintCmd.Flags().StringVar(&lintLevel, "level", "changed", "scan level: changed (default) or full")
+	lintCmd.Flags().StringVar(&lintLevel, "level", "", "scan level: changed or full (default: from config, then changed)")
 	lintCmd.Flags().StringSliceVar(&lintModules, "module", nil, "run only these modules (comma-separated)")
 	lintCmd.Flags().StringSliceVar(&lintNoModule, "no-module", nil, "skip these modules (comma-separated)")
 	lintCmd.Flags().BoolVar(&lintNoCache, "no-cache", false, "disable cache (clear and rescan)")
@@ -44,6 +44,13 @@ func init() {
 func runLint(cmd *cobra.Command, args []string) error {
 	if lintAll {
 		lintLevel = "full"
+	}
+	// CLI flag > config > default "changed"
+	if lintLevel == "" && cfg.Lint.Level != "" {
+		lintLevel = string(cfg.Lint.Level)
+	}
+	if lintLevel == "" {
+		lintLevel = "changed"
 	}
 
 	rootDir, err := os.Getwd()
