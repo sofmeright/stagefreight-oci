@@ -10,7 +10,11 @@ import (
 	"time"
 )
 
-const engineVersion = "0.1.0"
+// cacheSchemaVersion is bumped whenever the cache entry format or
+// finding semantics change. This invalidates stale entries automatically.
+// Bump this when: finding fields change, severity logic changes, or
+// module output format changes.
+const cacheSchemaVersion = "1"
 
 // Cache provides content-addressed lint result caching.
 // Dir is the resolved cache directory (call ResolveCacheDir to compute it).
@@ -69,7 +73,7 @@ func (c *Cache) Key(content []byte, moduleName string, configJSON string) string
 	h.Write(content)
 	h.Write([]byte(moduleName))
 	h.Write([]byte(configJSON))
-	h.Write([]byte(engineVersion))
+	h.Write([]byte(cacheSchemaVersion))
 	return hex.EncodeToString(h.Sum(nil))
 }
 

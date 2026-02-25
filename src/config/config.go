@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 
@@ -38,8 +40,10 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg := defaults()
-	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, err
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(cfg); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
 	return cfg, nil
 }

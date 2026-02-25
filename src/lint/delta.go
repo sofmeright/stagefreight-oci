@@ -15,8 +15,9 @@ import (
 
 // Delta detects changed files relative to a baseline.
 type Delta struct {
-	RootDir string
-	Verbose bool
+	RootDir      string
+	TargetBranch string
+	Verbose      bool
 }
 
 // ChangedFiles returns the list of files changed relative to the baseline.
@@ -164,12 +165,17 @@ func (d *Delta) branchChanges(repo *git.Repository) (map[string]bool, error) {
 
 // targetBranch determines the branch to diff against.
 func (d *Delta) targetBranch() string {
-	// Explicit env var takes priority
+	// 1. Explicit env var takes priority
 	if branch := os.Getenv("STAGEFREIGHT_TARGET_BRANCH"); branch != "" {
 		return branch
 	}
 
-	// Common CI env vars
+	// 2. Config-level override
+	if d.TargetBranch != "" {
+		return d.TargetBranch
+	}
+
+	// 3. Common CI env vars
 	ciVars := []string{
 		"CI_MERGE_REQUEST_TARGET_BRANCH_NAME", // GitLab CI
 		"GITHUB_BASE_REF",                     // GitHub Actions
@@ -182,8 +188,34 @@ func (d *Delta) targetBranch() string {
 		}
 	}
 
-	// Default to main
+	// 4. Detect from git remote HEAD
+	if branch := d.detectDefaultBranch(); branch != "" {
+		return branch
+	}
+
+	// 5. Fallback
 	return "main"
+}
+
+// detectDefaultBranch reads the symbolic ref for origin/HEAD to determine
+// the remote's default branch.
+func (d *Delta) detectDefaultBranch() string {
+	repo, err := git.PlainOpen(d.RootDir)
+	if err != nil {
+		return ""
+	}
+	// Don't resolve (false) — we need the symbolic ref target, not the commit hash
+	ref, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", "HEAD"), false)
+	if err != nil {
+		return ""
+	}
+	// ref.Target() is like "refs/remotes/origin/main"
+	target := ref.Target().String()
+	prefix := "refs/remotes/origin/"
+	if strings.HasPrefix(target, prefix) {
+		return strings.TrimPrefix(target, prefix)
+	}
+	return ""
 }
 
 // changeName extracts the file path from a tree change.

@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/sofmeright/stagefreight/src/config"
+	"golang.org/x/sync/semaphore"
 )
 
 // Engine orchestrates lint modules across files.
@@ -113,6 +115,8 @@ func (e *Engine) RunWithStats(ctx context.Context, files []FileInfo) ([]Finding,
 		errs     []error
 	)
 
+	sem := semaphore.NewWeighted(int64(runtime.NumCPU() * 2))
+
 	// Per-module stat counters (index matches e.Modules)
 	modStats := make([]ModuleStats, len(e.Modules))
 	for i, m := range e.Modules {
@@ -137,8 +141,10 @@ func (e *Engine) RunWithStats(ctx context.Context, files []FileInfo) ([]Finding,
 
 		for mi, mod := range e.Modules {
 			wg.Add(1)
+			sem.Acquire(ctx, 1)
 			go func(m Module, f FileInfo, data []byte, idx int) {
 				defer wg.Done()
+				defer sem.Release(1)
 
 				// Check cache
 				if e.Cache != nil && e.Cache.Enabled && data != nil {
@@ -197,7 +203,7 @@ func (e *Engine) RunWithStats(ctx context.Context, files []FileInfo) ([]Finding,
 					}
 					findings = append(findings, results...)
 					// Cache even empty results (clean pass).
-					// Skip write for modules that opted out (TTL=0).
+					// Skip write for modules that opted out (TTL<0).
 					if !noCache {
 						if cacheErr := e.Cache.Put(key, results); cacheErr != nil && e.Verbose {
 							fmt.Fprintf(os.Stderr, "cache: write failed for %s/%s: %v\n", m.Name(), f.Path, cacheErr)
@@ -296,10 +302,7 @@ func (e *Engine) ModuleNames() []string {
 
 func (e *Engine) isExcluded(path string) bool {
 	for _, pattern := range e.Config.Exclude {
-		if matched, _ := filepath.Match(pattern, path); matched {
-			return true
-		}
-		if matched, _ := filepath.Match(pattern, filepath.Base(path)); matched {
+		if matchGlob(pattern, path) || matchGlob(pattern, filepath.Base(path)) {
 			return true
 		}
 	}

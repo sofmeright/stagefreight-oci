@@ -94,7 +94,7 @@ func runLint(cmd *cobra.Command, args []string) error {
 
 	// Delta filtering — only scan changed files unless --level full
 	if lintLevel != "full" {
-		delta := &lint.Delta{RootDir: rootDir, Verbose: verbose}
+		delta := &lint.Delta{RootDir: rootDir, TargetBranch: cfg.Lint.TargetBranch, Verbose: verbose}
 		deltaCtx := context.Background()
 		changedSet, deltaErr := delta.ChangedFiles(deltaCtx)
 		if deltaErr != nil && verbose {
