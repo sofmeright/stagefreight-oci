@@ -63,7 +63,7 @@ func (m *freshnessModule) resolveImage(ctx context.Context, filePath string, sta
 
 	// Fetch tags — use custom registry if configured, else Docker Hub public API.
 	ep := m.cfg.registryEndpoint(EcosystemDockerImage)
-	defaultURL := fmt.Sprintf("https://registry.hub.docker.com/v2/repositories/%s/%s/tags?page_size=100&ordering=-last_updated", namespace, repo)
+	defaultURL := fmt.Sprintf("https://registry.hub.docker.com/v2/repositories/%s/%s/tags?page_size=100", namespace, repo)
 	url := m.cfg.registryURL(EcosystemDockerImage, defaultURL)
 	if url != defaultURL {
 		// Custom registry: use v2 tags/list endpoint.

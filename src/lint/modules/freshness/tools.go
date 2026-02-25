@@ -29,7 +29,7 @@ func (m *freshnessModule) checkTools(ctx context.Context, file lint.FileInfo, to
 
 		dep := Dependency{
 			Name:      tool.EnvName,
-			Current:   tool.Version,
+			Current:   strings.TrimPrefix(tool.Version, "v"),
 			Ecosystem: EcosystemDockerTool,
 			File:      file.Path,
 			Line:      tool.Line,
