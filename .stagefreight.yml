@@ -90,6 +90,16 @@ lint:
       options:
         sources:
           docker_images: true
+          docker_tools: true
+          go_modules: true
+        vulnerability:
+          enabled: true
+    secrets:
+      enabled: true
+    conflicts:
+      enabled: true
+    largefiles:
+      enabled: true
 
 component:
   spec_files:
