@@ -1,375 +1,194 @@
-# Narrator — Managed README Sections
+# StageFreight — Narrator & Badges
 
-Narrator is StageFreight's system for composing and injecting generated content into markdown files. It uses HTML comment markers to define managed regions that are surgically replaced on each run, leaving everything else untouched.
+Narrator is StageFreight's content composition and injection system. It
+generates SVG badge assets, composes badge rows and text into markdown,
+and injects them into managed `<!-- sf:<name> -->` sections in any
+document — your local README, Docker Hub descriptions, or any file
+referenced by config.
 
-## Managed Sections
+Three config blocks work together:
 
-A managed section is a region of a markdown file wrapped in `<!-- sf:<name> -->` markers:
+| Block | Purpose |
+|-------|---------|
+| `badges:` | Generate SVG badge files (the asset pipeline) |
+| `docker.readme:` | Sync README to registries with badge injection |
+| `narrator:` | General-purpose section composition for any file |
 
-```markdown
-<!-- sf:badges -->
-[![release](https://...)](https://...) [![license](https://...)](https://...)
-<!-- /sf:badges -->
-```
+---
 
-**Rules:**
+## Badge Generation (`badges:`)
 
-- Everything between the markers is owned by StageFreight and will be replaced on each run.
-- Everything outside the markers is never touched.
-- Sections can appear anywhere in the document — top, middle, inside tables, inline in paragraphs.
-- Section names are freeform. Use descriptive names: `badges`, `status-badges`, `api-table`, `docker-stats`.
-- Runs are idempotent. Running the same config twice produces identical output.
-- If markers don't exist in the document when a section is first composed, the wrapped section is inserted based on placement config (default: top of document).
-
-## Block vs. Inline Sections
-
-Sections operate in two modes, detected automatically from how the markers are placed in the source document.
-
-### Block Sections
-
-Markers on separate lines. Content gets newline padding for readability.
-
-```markdown
-<!-- sf:badges -->
-[![release](https://...)](https://...) [![license](https://...)](https://...)
-<!-- /sf:badges -->
-```
-
-### Inline Sections
-
-Markers on the same line (or with no newlines between them). Content is inserted directly with no padding — enabling sections inside table cells, list items, or mid-paragraph.
-
-```markdown
-| Service | Status | Version |
-|---------|--------|---------|
-| API | <!-- sf:api-status -->healthy<!-- /sf:api-status --> | <!-- sf:api-version -->1.2.3<!-- /sf:api-version --> |
-| DB  | <!-- sf:db-status -->degraded<!-- /sf:db-status --> | <!-- sf:db-version -->15.4<!-- /sf:db-version --> |
-```
-
-Each cell is independently managed. The table structure, pipes, and headers are static markdown you wrote. Only the content between markers changes.
-
-Inline sections work anywhere markdown allows HTML comments:
-
-```markdown
-Current build: <!-- sf:build-status -->passing<!-- /sf:build-status --> | Coverage: <!-- sf:coverage -->87%<!-- /sf:coverage -->
-```
-
-When creating a new section via config, set `inline: true` to insert it inline (no newline padding) on first creation. After creation, block vs. inline mode is auto-detected from marker placement in the document.
-
-### Nested Sections
-
-Sections can contain other sections:
-
-```markdown
-<!-- sf:status-row -->
-<!-- sf:build-badge -->[![build](...)](#)<!-- /sf:build-badge --> <!-- sf:coverage-badge -->[![coverage](...)](#)<!-- /sf:coverage-badge -->
-<!-- /sf:status-row -->
-```
-
-Target inner sections directly. Replacing an outer section wholesale will replace inner markers too.
-
-## Plain Mode
-
-Set `plain: true` to output composed content without `<!-- sf: -->` markers. Content is inserted as plain text — no markers, no wrapping.
-
-Plain mode is useful for:
-- Shell-driven README generation where you control the entire document
-- Composing content that doesn't need to be idempotently managed
-- Generating content for tools that don't understand HTML comments
-
-```yaml
-narrator:
-  files:
-    - path: README.md
-      sections:
-        - name: intro
-          plain: true
-          placement: top
-          items:
-            - text: "# My Project"
-            - break:
-            - text: "A brief description of what this does."
-```
-
-## Placement
-
-Sections support config-driven placement relative to other content in the document.
-
-### Anchors
-
-| Field | Description |
-|-------|-------------|
-| `section` | Reference to another `<!-- sf:<name> -->` section |
-| `match` | Regex pattern against document content |
-
-### Position
-
-One field with generous aliases. **Default is `below`** — forgetting `position:` never puts something at the top by surprise.
-
-| Behavior | Aliases | Description |
-|----------|---------|-------------|
-| **above** | `above`, `over`, `up`, `top` | Insert before the anchor |
-| **below** | `below`, `under`, `down`, `bottom`, `beneath` | Insert after the anchor **(default)** |
-| **replace** | `replace`, `fill`, `inside`, `target` | Replace the anchor content |
-
-Special shorthands: `placement: top` (start of document), `placement: bottom` (end of document).
-
-### Scoping
-
-`section:` and `match:` can be combined — `section:` scopes the regex to only search within that section's content:
-
-```yaml
-# Replace a specific line inside a section
-- name: pulls-count
-  placement:
-    section: docker-stats
-    match: "^pulls: .*"
-    position: replace
-  items:
-    - text: "pulls: 12,847"
-```
-
-### Full Placement Matrix
-
-| Anchor | `above` | `below` (default) | `replace` |
-|--------|---------|-------------------|-----------|
-| `section: X` | Insert before `<!-- sf:X -->` | Insert after `<!-- /sf:X -->` | Replace content between markers |
-| `match: regex` | Insert before matched line | Insert after matched line | Replace matched line(s) |
-| `section` + `match` | Above match within section | Below match within section | Replace match within section |
-| `top` | — | First in document | — |
-| `bottom` | — | Last in document | — |
-
-### Placement Config Syntax
-
-Placement supports both shorthand (string) and full (object) forms:
-
-```yaml
-# Shorthand — document-level position
-placement: top
-placement: bottom
-
-# Full form — anchored to section
-placement:
-  section: badges
-  position: below
-
-# Full form — anchored to regex match
-placement:
-  match: "^## Installation"
-  position: above
-
-# Full form — scoped regex within section
-placement:
-  section: docker-stats
-  match: "^pulls: .*"
-  position: replace
-```
-
-## Modules
-
-Modules are pluggable content producers. Each module type knows how to render itself to inline markdown.
-
-### Badge Module
-
-Renders a markdown badge image, optionally wrapped in a link.
-
-| Field     | Description |
-|-----------|-------------|
-| `alt`     | Image alt text |
-| `file`    | Relative path to a committed SVG (resolved via `raw_base`) |
-| `url`     | Absolute image URL (shields.io, etc.) — mutually exclusive with `file` |
-| `link`    | Click target — absolute URL or relative path (resolved via `link_base`) |
-
-```yaml
-- badge: release
-  file: ".stagefreight/badges/release.svg"
-  link: "https://github.com/myorg/myrepo/releases"
-```
-
-### Shield Module
-
-Shorthand for shields.io badges. The shield path is appended to `https://img.shields.io/`.
-
-| Field     | Description |
-|-----------|-------------|
-| `shield`  | shields.io path (e.g., `docker/pulls/myorg/myrepo`) |
-| `label`   | Override the default label (optional) |
-| `link`    | Click target URL |
-
-```yaml
-- shield: docker/pulls/prplanit/stagefreight
-  link: "https://hub.docker.com/r/prplanit/stagefreight"
-
-- shield: github/actions/workflow/status/sofmeright/stagefreight/ci.yml
-  label: build
-  link: "https://github.com/sofmeright/stagefreight/actions"
-```
-
-Produces:
-```
-[![pulls](https://img.shields.io/docker/pulls/prplanit/stagefreight)](https://hub.docker.com/r/prplanit/stagefreight)
-[![build](https://img.shields.io/github/actions/workflow/status/sofmeright/stagefreight/ci.yml)](https://github.com/sofmeright/stagefreight/actions)
-```
-
-### Text Module
-
-Literal markdown text. Supports template variables.
-
-| Field   | Description |
-|---------|-------------|
-| `text`  | Markdown content (supports `{version}`, `{env:VAR}`, etc.) |
-
-```yaml
-- text: "**Current version:** {version}"
-- text: "Built with [StageFreight](https://github.com/sofmeright/stagefreight)"
-```
-
-### Break Module
-
-Forces a line break between items. Items before the break are on one line, items after start a new line.
-
-```yaml
-- break:
-```
-
-### Image Module (future)
-
-Inline image from URL or relative path.
-
-## Composition
-
-The narrator composes modules into rows:
-
-- **Items** are space-joined until a `break:` forces a new line.
-- **`break:`** items start a new row.
-
-```yaml
-items:
-  - badge: release
-    link: "https://..."
-  - badge: license
-    link: LICENSE
-  - shield: docker/pulls/prplanit/stagefreight
-    link: "https://hub.docker.com/..."
-  - break:
-  - shield: github/actions/workflow/status/sofmeright/stagefreight/ci.yml
-    label: build
-  - text: "— {version}"
-```
-
-Produces:
-```
-[![release](...)](...) [![license](...)](...) [![pulls](https://img.shields.io/...)](...)
-[![build](https://img.shields.io/...)](...) — 1.2.3
-```
-
-## Template Resolution
-
-All narrator modules support template variables. Templates are resolved universally across every module type — badge values, text content, shield labels, etc.
-
-| Template | Description |
-|----------|-------------|
-| `{version}` | Full semantic version (e.g., `1.2.3`) |
-| `{major}` | Major version number |
-| `{minor}` | Minor version number |
-| `{patch}` | Patch version number |
-| `{major}.{minor}` | Major.minor (composable) |
-| `{sha}` | Full commit SHA |
-| `{sha:N}` | First N characters of SHA (e.g., `{sha:7}`) |
-| `{branch}` | Current branch name |
-| `{env:VAR}` | Environment variable value |
-
-## URL Resolution
-
-Badge `file` and `link` paths are resolved using base URLs:
-
-| Field | Resolves via | Purpose |
-|-------|-------------|---------|
-| `file` | `raw_base` | Image source — needs raw file access |
-| `link` (relative) | `link_base` | Click target — rendered page URL |
-| `url` | (used as-is) | Absolute URL |
-| `link` (absolute) | (used as-is) | Absolute URL |
-
-### `raw_base` Auto-Derivation
-
-If `raw_base` is not set, it is derived from `link_base`:
-
-| Forge | `link_base` | Derived `raw_base` |
-|-------|-------------|---------------------|
-| GitHub | `github.com/{owner}/{repo}/blob/{branch}` | `raw.githubusercontent.com/{owner}/{repo}/{branch}` |
-| GitLab | `gitlab.com/{owner}/{repo}/-/blob/{branch}` | `gitlab.com/{owner}/{repo}/-/raw/{branch}` |
-| Gitea  | `{host}/{owner}/{repo}/src/branch/{branch}` | `{host}/{owner}/{repo}/raw/branch/{branch}` |
-
-Set `raw_base` explicitly for self-hosted forges or non-standard URL patterns.
-
-## Badge Generation
-
-The badge asset pipeline is separate from composition. Generation creates SVG files; the narrator composes them into documents.
-
-### Global Defaults + Per-Item Overrides
+Generates SVG badge files with embedded fonts. Every font — built-in or
+custom — gets base64 `@font-face` embedded in the SVG for pixel-perfect
+rendering everywhere.
 
 ```yaml
 badges:
-  font: dejavu-sans              # default for all items
-  font_size: 11                  # default for all items
-  # font_file: ./Custom.ttf      # custom font file (overrides font)
+  # Global defaults (applied to all items unless overridden)
+  font: dejavu-sans             # built-in font name
+  font_size: 11                 # pixel size
+  # font_file: ./Custom.ttf     # custom TTF/OTF (overrides font)
+
   items:
     - name: release
       label: release
-      value: "{version}"         # gitver templates: {version}, {major}.{minor}, {sha:7}
-      color: auto                # auto = status-driven, or hex "#4c1"
+      value: "{version}"        # template variables: {version}, {env:VAR}, etc.
+      color: auto               # "auto" = status-driven, or hex "#4c1"
       output: .stagefreight/badges/release.svg
-      # uses global font defaults
+
+    - name: build
+      label: build
+      value: "{env:BUILD_STATUS}"
+      color: auto
+      font: monofur             # per-badge font override
+      output: .stagefreight/badges/build.svg
 
     - name: license
       label: license
-      value: "AGPL-3.0"
-      color: "#007ec6"
-      font: monofur              # per-badge font override
-      font_size: 13              # per-badge size override
+      value: "AGPL-3.0+"
+      color: "#310937"
+      font: monofur
       output: .stagefreight/badges/license.svg
 
-    - name: fancy
-      label: built with
-      value: "stagefreight"
-      color: "#8a2be2"
-      font_file: ./fonts/Custom.ttf  # per-badge custom file
-      output: .stagefreight/badges/fancy.svg
+    - name: updated
+      label: updated
+      value: "{env:BUILD_DATE}"
+      color: "#236144"
+      output: .stagefreight/badges/updated.svg
 ```
+
+### Badge Item Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | _(required)_ | Unique identifier |
+| `label` | string | _(required)_ | Left side text |
+| `value` | string | _(required)_ | Right side text (supports templates) |
+| `color` | string | `"auto"` | Hex color or `"auto"` (status-driven) |
+| `output` | string | `.stagefreight/badges/<name>.svg` | Output file path |
+| `font` | string | from global | Per-badge font override |
+| `font_size` | float | from global | Per-badge font size override |
+| `font_file` | string | from global | Per-badge custom font file override |
 
 ### Built-In Fonts
 
-`dejavu-sans` (default), `vera`, `monofur`, `vera-mono`, `ethereal`, `playpen-sans`, `doto`, `penyae`
+`dejavu-sans` (default), `vera`, `monofur`, `vera-mono`, `ethereal`,
+`playpen-sans`, `doto`, `penyae`
 
-All fonts — built-in and custom — go through the same `sfnt` + `opentype` measurement code path. Built-in fonts are just embedded TTF files. Every font gets base64 `@font-face` embedded in the SVG for pixel-perfect rendering everywhere.
+---
 
-## Full Config Reference
+## Docker Hub README Sync (`docker.readme:`)
+
+Syncs your README to container registries (Docker Hub, GHCR, Quay). Before
+pushing, narrator composes badge entries into `<!-- sf:badges -->` sections,
+rewrites relative links to absolute URLs, and applies regex transforms.
 
 ```yaml
-# Badge generation (asset pipeline)
-badges:
-  font: dejavu-sans
-  font_size: 11
-  items:
-    - name: release
-      label: release
-      value: "{version}"
-      color: auto
-      output: .stagefreight/badges/release.svg
-    - name: license
-      label: license
-      value: "AGPL-3.0"
-      color: "#007ec6"
-      output: .stagefreight/badges/license.svg
+docker:
+  readme:
+    # Explicitly enable/disable readme sync.
+    # Default: auto-detected (enabled if any field is set).
+    # enabled: true
 
-# Narrator composition (top-level)
+    # Source README file (relative to project root)
+    # Default: README.md
+    # file: README.md
+
+    # Short description for Docker Hub (max 100 chars)
+    # Default: extracted from first paragraph of README
+    description: "Declarative CI/CD CLI"
+
+    # Base URL for resolving relative links in README
+    # Relative paths like LICENSE become link_base/LICENSE
+    link_base: "https://github.com/sofmeright/stagefreight/blob/main"
+
+    # Base URL for raw file access (SVG images, etc.)
+    # Auto-derived from link_base if empty:
+    #   github.com/.../blob/main → raw.githubusercontent.com/.../main
+    #   gitlab.com/.../-/blob/main → gitlab.com/.../-/raw/main
+    #   gitea/.../src/branch/main → gitea/.../raw/branch/main
+    # raw_base: ""
+
+    # Legacy marker extraction (pre-narrator).
+    # When true, only content between start/end markers is synced.
+    # markers: false
+    # start_marker: "<!-- dockerhub-start -->"
+    # end_marker: "<!-- dockerhub-end -->"
+
+    # ── Badge Injection ────────────────────────────────────
+    # Narrator composes these into <!-- sf:badges --> sections.
+    # Badges from committed SVGs use raw_base for the image URL.
+    # Shields.io badges use url directly.
+    badges:
+      - alt: release
+        file: ".stagefreight/badges/release.svg"
+        link: "https://github.com/sofmeright/stagefreight/releases"
+
+      - alt: build
+        file: ".stagefreight/badges/build.svg"
+        link: "https://github.com/sofmeright/stagefreight/actions"
+
+      - alt: license
+        file: ".stagefreight/badges/license.svg"
+        link: LICENSE
+
+      - alt: updated
+        file: ".stagefreight/badges/updated.svg"
+
+      - alt: pulls
+        url: "https://img.shields.io/docker/pulls/prplanit/stagefreight"
+        link: "https://hub.docker.com/r/prplanit/stagefreight"
+
+    # Target a specific section instead of the default "badges"
+    # - alt: docker-size
+    #   url: "https://img.shields.io/docker/image-size/myorg/myrepo"
+    #   section: docker-stats
+
+    # ── Regex Transforms ───────────────────────────────────
+    # Applied after badge injection and link rewriting.
+    # transforms:
+    #   - pattern: '!\[version\]\(.*?\)'
+    #     replace: '![version](https://img.shields.io/badge/version-{version}-blue)'
+```
+
+### Badge Entry Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `alt` | string | _(required)_ | Image alt text |
+| `file` | string | — | Relative path to committed SVG (resolved via `raw_base`) |
+| `url` | string | — | Absolute image URL (shields.io, etc.) — mutually exclusive with `file` |
+| `link` | string | — | Click target (absolute URL or relative path resolved via `link_base`) |
+| `section` | string | `"badges"` | Target `<!-- sf:<section> -->` section name |
+
+### How Badge Injection Works
+
+1. Badge entries are grouped by `section` (default: `"badges"`)
+2. Each group is composed through the narrator into a single markdown row
+3. The result replaces the content of the `<!-- sf:<section> -->` markers
+4. If markers don't exist, the section is inserted at the top of the document
+
+This is the same `ReplaceSection()` / `WrapSection()` infrastructure that
+all narrator-managed content uses — badges are just one module type.
+
+---
+
+## Narrator Composition (`narrator:`)
+
+General-purpose section composition for any file. Composes modules (badges,
+shields, text) into managed sections with configurable placement.
+
+```yaml
 narrator:
+  # Base URLs for resolving relative paths in modules
   link_base: "https://github.com/myorg/myrepo/blob/main"
-  # raw_base: auto-derived from link_base (or set explicitly)
+  # raw_base: auto-derived from link_base
+
   files:
     - path: README.md
       sections:
-        # Badge row at the top
+
+        # ── Badge row at the top ───────────────────────────
         - name: badges
           placement: top
           items:
@@ -382,30 +201,34 @@ narrator:
             - shield: docker/pulls/prplanit/stagefreight
               link: "https://hub.docker.com/r/prplanit/stagefreight"
 
-        # Docker stats section after "## Docker" heading
-        - name: docker-stats
+        # ── Multi-row with breaks ──────────────────────────
+        - name: status
           placement:
-            match: "^## Docker"
+            match: "^## Status"
             position: below
           items:
+            - shield: github/actions/workflow/status/myorg/myrepo/ci.yml
+              label: build
             - shield: docker/image-size/myorg/myrepo
-              link: "https://hub.docker.com/r/myorg/myrepo"
-            - text: "Pulls: {env:DOCKER_PULLS}"
+            - break:
+            - text: "**Version:** {version}"
 
-        # Inline version in a table cell
+        # ── Inline section (no newline padding) ────────────
         - name: api-version
           inline: true
           items:
             - text: "{version}"
 
-        # Plain text heading (no markers)
+        # ── Plain text (no markers) ────────────────────────
         - name: title
           plain: true
           placement: top
           items:
             - text: "# My Project"
+            - break:
+            - text: "A brief description of what this does."
 
-        # Replace a specific line inside another section
+        # ── Scoped replacement within a section ────────────
         - name: pulls-count
           placement:
             section: docker-stats
@@ -413,29 +236,199 @@ narrator:
             position: replace
           items:
             - text: "Pulls: 12,847"
-
-# Docker readme sync (uses narrator for badge injection)
-docker:
-  readme:
-    link_base: "https://github.com/myorg/myrepo/blob/main"
-    badges:
-      - alt: release
-        file: ".stagefreight/badges/release.svg"
-        link: "https://github.com/myorg/myrepo/releases"
-      - alt: license
-        file: ".stagefreight/badges/license.svg"
-        link: LICENSE
-      - alt: pulls
-        url: "https://img.shields.io/docker/pulls/myorg/myrepo"
-        link: "https://hub.docker.com/r/myorg/myrepo"
-      - alt: docker-size
-        url: "https://img.shields.io/docker/image-size/myorg/myrepo"
-        section: docker-stats    # targets <!-- sf:docker-stats --> instead of default
 ```
 
-## Shell Usage
+---
 
-The narrator can be driven entirely from the shell, enabling template-based README generation:
+## Managed Sections
+
+Content is injected into `<!-- sf:<name> -->` / `<!-- /sf:<name> -->` markers.
+Everything between markers is replaced on each run. Everything outside is
+never touched.
+
+```markdown
+<!-- sf:badges -->
+[![release](https://...)](https://...) [![license](https://...)](https://...)
+<!-- /sf:badges -->
+```
+
+### Block vs Inline
+
+Detected automatically from marker placement in the source document.
+
+**Block** — markers on separate lines, content gets newline padding:
+```markdown
+<!-- sf:badges -->
+[![release](https://...)](https://...)
+<!-- /sf:badges -->
+```
+
+**Inline** — markers on the same line, content inserted directly:
+```markdown
+| Version | <!-- sf:api-version -->1.2.3<!-- /sf:api-version --> |
+```
+
+Set `inline: true` in config for first-time creation of inline sections.
+
+### Nested Sections
+
+Sections can contain other sections. Target inner sections directly.
+
+```markdown
+<!-- sf:status-row -->
+<!-- sf:build-badge -->[![build](...)](#)<!-- /sf:build-badge --> <!-- sf:coverage-badge -->[![cov](...)](#)<!-- /sf:coverage-badge -->
+<!-- /sf:status-row -->
+```
+
+---
+
+## Modules
+
+Pluggable content producers. Each renders to inline markdown.
+
+### Badge Module
+
+```yaml
+- badge: release                    # alt text
+  file: ".stagefreight/badges/release.svg"  # relative path (resolved via raw_base)
+  link: "https://..."               # click target
+```
+
+Produces: `[![release](https://raw.../release.svg)](https://...)`
+
+### Shield Module
+
+Shorthand for shields.io badges. Path appended to `https://img.shields.io/`.
+
+```yaml
+- shield: docker/pulls/myorg/myrepo
+  label: pulls                      # override alt text (default: last path segment)
+  link: "https://hub.docker.com/..."
+```
+
+Produces: `[![pulls](https://img.shields.io/docker/pulls/myorg/myrepo)](https://...)`
+
+### Text Module
+
+Literal markdown. Supports template variables.
+
+```yaml
+- text: "**Current version:** {version}"
+```
+
+### Break Module
+
+Forces a line break. Items before the break are space-joined on one line,
+items after start a new line.
+
+```yaml
+- break:
+```
+
+---
+
+## Placement
+
+Controls where sections are placed in the document.
+
+### Shorthand
+
+```yaml
+placement: top          # start of document
+placement: bottom       # end of document
+```
+
+### Full Form
+
+```yaml
+# Relative to another section
+placement:
+  section: badges
+  position: below       # above | below (default) | replace
+
+# Relative to a regex match
+placement:
+  match: "^## Installation"
+  position: above
+
+# Scoped: regex within a section
+placement:
+  section: docker-stats
+  match: "^Pulls: .*"
+  position: replace
+```
+
+### Position Aliases
+
+| Behavior | Aliases |
+|----------|---------|
+| **above** | `above`, `over`, `up`, `top` |
+| **below** (default) | `below`, `under`, `down`, `bottom`, `beneath` |
+| **replace** | `replace`, `fill`, `inside`, `target` |
+
+### Placement Matrix
+
+| Anchor | `above` | `below` (default) | `replace` |
+|--------|---------|-------------------|-----------|
+| `section: X` | Before `<!-- sf:X -->` | After `<!-- /sf:X -->` | Replace content between markers |
+| `match: regex` | Before matched line | After matched line | Replace matched line(s) |
+| `section` + `match` | Above match within section | Below match within section | Replace match within section |
+| `top` | — | First in document | — |
+| `bottom` | — | Last in document | — |
+
+---
+
+## URL Resolution
+
+| Field | Resolved via | Purpose |
+|-------|-------------|---------|
+| `file` | `raw_base` | Image source — needs raw file access |
+| `link` (relative) | `link_base` | Click target — rendered page URL |
+| `url` | used as-is | Absolute image URL |
+| `link` (absolute) | used as-is | Absolute click target |
+
+### `raw_base` Auto-Derivation
+
+If `raw_base` is not set, it is derived from `link_base`:
+
+| Forge | `link_base` | Derived `raw_base` |
+|-------|-------------|---------------------|
+| GitHub | `github.com/{owner}/{repo}/blob/{branch}` | `raw.githubusercontent.com/{owner}/{repo}/{branch}` |
+| GitLab | `gitlab.com/{owner}/{repo}/-/blob/{branch}` | `gitlab.com/{owner}/{repo}/-/raw/{branch}` |
+| Gitea | `{host}/{owner}/{repo}/src/branch/{branch}` | `{host}/{owner}/{repo}/raw/branch/{branch}` |
+
+---
+
+## Template Variables
+
+All narrator modules support template variables across every field.
+
+| Template | Description |
+|----------|-------------|
+| `{version}` | Full semantic version (e.g., `1.2.3`) |
+| `{major}`, `{minor}`, `{patch}` | Semver components |
+| `{major}.{minor}` | Composable (any combination) |
+| `{sha}`, `{sha:N}` | Commit SHA (default 7, or N chars) |
+| `{branch}` | Current branch name |
+| `{env:VAR}` | Environment variable value |
+| `{date}`, `{datetime}`, `{timestamp}` | UTC date formats |
+| `{date:FORMAT}` | Custom Go time layout |
+| `{commit.date}` | HEAD commit date |
+| `{project.name}` | Repo name from git remote |
+| `{project.url}` | Repo URL (SSH to HTTPS conversion) |
+| `{project.license}` | SPDX identifier from LICENSE file |
+| `{project.description}` | From config `docker.readme.description` |
+| `{project.language}` | Auto-detected from lockfiles |
+| `{docker.pulls}`, `{docker.pulls:raw}` | Docker Hub pull count (formatted / raw) |
+| `{docker.stars}` | Docker Hub star count |
+| `{docker.size}`, `{docker.size:raw}` | Image size (formatted / bytes) |
+| `{docker.latest}` | Latest tag digest (12 chars) |
+
+---
+
+## CLI Commands
+
+### `narrator compose` — Ad-Hoc Shell Mode
 
 ```bash
 # Compose badges into a section
@@ -451,10 +444,27 @@ stagefreight narrator compose -f README.md --plain \
   text:"## Prerequisites" \
   break: \
   text:"Make sure you have Docker installed."
+```
 
-# Run all narrator sections from config
+### `narrator run` — Config-Driven
+
+```bash
+# Process all narrator sections from .stagefreight.yml
 stagefreight narrator run
 
 # Dry-run to preview changes
 stagefreight narrator run --dry-run
 ```
+
+---
+
+## Pipeline Integration
+
+During `stagefreight docker build`, narrator runs automatically:
+
+1. **Badge generation** — renders all `badges.items` to SVG files
+2. **Docker README sync** — composes `docker.readme.badges` into
+   `<!-- sf:badges -->` sections, rewrites links, applies transforms,
+   pushes to each registry
+3. **Build output** — badge section in pipeline output shows each
+   generated badge with name, output path, font, size, and color
