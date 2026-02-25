@@ -16,6 +16,10 @@ type Dependency struct {
 	// Vulnerability info populated by the OSV correlation pass.
 	Vulnerabilities []VulnInfo // known CVEs affecting the current version
 
+	// Advisory is an optional informational message set by the resolver
+	// when a non-versioned or pre-release tag has stable releases available.
+	Advisory string
+
 	// Fields populated by the config/rule engine after resolution.
 	// Used by future update commands for MR grouping and automerge.
 	Group     string // assigned group name from package rules

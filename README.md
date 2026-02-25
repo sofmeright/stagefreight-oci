@@ -2,6 +2,10 @@
 [![pulls](https://img.shields.io/docker/pulls/prplanit/stagefreight)](https://hub.docker.com/r/prplanit/stagefreight)
 [![license](https://img.shields.io/github/license/sofmeright/stagefreight)](LICENSE)
 
+<p align="center">
+  <img src="src/assets/logo.png" width="220" alt="StageFreight">
+</p>
+
 # StageFreight
 
 > *Hello World's a Stage*

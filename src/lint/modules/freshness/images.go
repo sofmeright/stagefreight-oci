@@ -81,19 +81,105 @@ func (m *freshnessModule) resolveImage(ctx context.Context, filePath string, sta
 	// Decompose current tag and find latest in same suffix family.
 	current := decomposeTag(tag)
 	if current.Version == nil {
-		// Non-versioned tag (e.g. "latest", "noble") — can't do semver comparison.
-		// Digest tracking handled by lockfile.go.
+		// Non-versioned tag (e.g. "latest", "noble", "sha-...") — can't do
+		// semver comparison. Digest tracking handled by lockfile.go.
+		// Check for stable upgrade advisory.
+		dep.Advisory = suggestStableUpgrade(current, tags)
 		return dep
 	}
 
-	family := filterTagsBySuffix(tags, current.Suffix)
+	family := filterTagsByFamily(tags, current.Family)
 	latest := latestInFamily(family)
 	if latest == nil {
 		return dep
 	}
 
 	dep.Latest = latest.Raw
+
+	// Check for stable upgrade advisory on pre-release tags.
+	if current.PreRank > 0 {
+		dep.Advisory = suggestStableUpgrade(current, tags)
+	}
 	return dep
+}
+
+// suggestStableUpgrade checks if a non-versioned or pre-release tag has a
+// matching stable release available by sampling the already-fetched registry
+// tags. Returns an advisory message or empty string.
+func suggestStableUpgrade(current decomposedTag, tags []string) string {
+	// Group all tags by family, find families that have stable releases.
+	type familyInfo struct {
+		latest *decomposedTag
+	}
+	families := make(map[string]*familyInfo)
+
+	for _, t := range tags {
+		dt := decomposeTag(t)
+		if dt.Version == nil || isDateLikeVersion(dt.Version) {
+			continue
+		}
+		if dt.PreRank > 0 {
+			continue // only count stable releases
+		}
+		fi, ok := families[dt.Family]
+		if !ok {
+			fi = &familyInfo{}
+			families[dt.Family] = fi
+		}
+		if fi.latest == nil || dt.Version.GreaterThan(fi.latest.Version) {
+			dtCopy := dt
+			fi.latest = &dtCopy
+		}
+	}
+
+	if len(families) == 0 {
+		return ""
+	}
+
+	// For sha- tags: report that stable releases exist.
+	if current.Family == "sha" {
+		// Find the best stable family to suggest.
+		var bestTag *decomposedTag
+		for _, fi := range families {
+			if fi.latest != nil {
+				if bestTag == nil || fi.latest.Version.GreaterThan(bestTag.Version) {
+					bestTag = fi.latest
+				}
+			}
+		}
+		if bestTag != nil {
+			return fmt.Sprintf("stable releases available (e.g. %s)", bestTag.Raw)
+		}
+		return "stable releases available"
+	}
+
+	// For pre-release tags: check if a stable release exists in the same family.
+	if current.PreRank > 0 {
+		fi, ok := families[current.Family]
+		if ok && fi.latest != nil {
+			return fmt.Sprintf("stable release %s available (currently on pre-release)", fi.latest.Raw)
+		}
+		// Check bare family (empty string) as fallback.
+		fi, ok = families[""]
+		if ok && fi.latest != nil {
+			return fmt.Sprintf("stable release %s available (currently on pre-release)", fi.latest.Raw)
+		}
+		return "stable release may be available — currently on pre-release channel"
+	}
+
+	// For other non-versioned tags (e.g. "latest", "noble"): check any stable.
+	var bestTag *decomposedTag
+	for _, fi := range families {
+		if fi.latest != nil {
+			if bestTag == nil || fi.latest.Version.GreaterThan(bestTag.Version) {
+				bestTag = fi.latest
+			}
+		}
+	}
+	if bestTag != nil {
+		return fmt.Sprintf("consider pinning to a versioned tag (e.g. %s)", bestTag.Raw)
+	}
+	return ""
 }
 
 // splitImageTag splits "golang:1.25-alpine" into ("golang", "1.25-alpine").

@@ -108,11 +108,23 @@ func (m *freshnessModule) depsToFindings(deps []Dependency) []lint.Finding {
 		// A dep can be on the latest version and still have unpatched CVEs.
 		findings = append(findings, m.vulnFindings(dep)...)
 
+		// Emit advisory finding for non-versioned/pre-release tags with
+		// stable releases available (e.g. sha-pinned images).
+		if dep.Advisory != "" {
+			findings = append(findings, lint.Finding{
+				File:     dep.File,
+				Line:     dep.Line,
+				Module:   "freshness",
+				Severity: lint.SeverityInfo,
+				Message:  dep.Advisory,
+			})
+		}
+
 		if dep.Latest == "" || dep.Current == dep.Latest {
 			continue
 		}
 
-		delta := compareVersionStrings(dep.Current, dep.Latest)
+		delta := compareDependencyVersions(dep.Current, dep.Latest, dep.Ecosystem)
 		if delta.IsZero() {
 			// Versions parsed equal — might be non-semver difference.
 			if dep.Current != dep.Latest {

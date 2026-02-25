@@ -20,38 +20,60 @@ type BannerInfo struct {
 }
 
 // Banner prints the StageFreight logo banner with version info.
-// Color mode: renders the embedded logo via chafa at 35x15 with identity
-// text floating beside it, vertically centered. Falls back to text-only
-// if chafa is not available. No-color mode: plain text header.
+// Three rendering paths, all sharing the same side-by-side layout:
+//   - Color + chafa available: runtime truecolor render via chafa
+//   - Color, no chafa: prerendered 256-color art embedded at build time
+//   - No-color: prerendered greyscale 256-color art
 func Banner(w io.Writer, info BannerInfo, color bool) {
-	if !color {
-		bannerPlainText(w, info)
-		return
+	var artLines []string
+	if color {
+		artLines = renderLogo()
+		if artLines == nil {
+			artLines = splitPrerendered(prerenderedColor)
+		}
+	} else {
+		artLines = splitPrerendered(prerenderedGray)
 	}
 
-	artLines := renderLogo()
-	if artLines == nil {
-		// chafa not available — text-only fallback with color
-		bannerColorText(w, info)
-		return
-	}
+	textItems := buildIdentityText(info, color)
+	printBanner(w, artLines, textItems)
+}
 
-	// Build the identity text lines to float beside the logo.
-	var textItems []string
-	textItems = append(textItems, "\033[1;36mStageFreight\033[0m")
-	if info.Version != "" {
-		textItems = append(textItems, "\033[36m"+info.Version+"\033[0m")
+// buildIdentityText assembles the identity lines shown beside the logo.
+func buildIdentityText(info BannerInfo, color bool) []string {
+	var items []string
+	if color {
+		items = append(items, "\033[1;36mStageFreight\033[0m")
+		if info.Version != "" {
+			items = append(items, "\033[36m"+info.Version+"\033[0m")
+		}
+		if info.SHA != "" && info.Branch != "" {
+			items = append(items, "\033[36m"+info.SHA+" \033[0m· \033[36m"+info.Branch+"\033[0m")
+		} else if info.SHA != "" {
+			items = append(items, "\033[36m"+info.SHA+"\033[0m")
+		}
+		if info.Date != "" {
+			items = append(items, "\033[36m"+info.Date+"\033[0m")
+		}
+	} else {
+		items = append(items, "StageFreight")
+		if info.Version != "" {
+			items = append(items, info.Version)
+		}
+		if info.SHA != "" && info.Branch != "" {
+			items = append(items, info.SHA+" · "+info.Branch)
+		} else if info.SHA != "" {
+			items = append(items, info.SHA)
+		}
+		if info.Date != "" {
+			items = append(items, info.Date)
+		}
 	}
-	if info.SHA != "" && info.Branch != "" {
-		textItems = append(textItems, "\033[36m"+info.SHA+" \033[0m· \033[36m"+info.Branch+"\033[0m")
-	} else if info.SHA != "" {
-		textItems = append(textItems, "\033[36m"+info.SHA+"\033[0m")
-	}
-	if info.Date != "" {
-		textItems = append(textItems, "\033[36m"+info.Date+"\033[0m")
-	}
+	return items
+}
 
-	// Vertically center text items against the art.
+// printBanner composites art lines with identity text, vertically centered.
+func printBanner(w io.Writer, artLines, textItems []string) {
 	textLines := make([]string, len(artLines))
 	startLine := (len(artLines) - len(textItems)) / 2
 	for i, item := range textItems {
@@ -70,6 +92,11 @@ func Banner(w io.Writer, info BannerInfo, color bool) {
 		}
 	}
 	fmt.Fprintln(w)
+}
+
+// splitPrerendered splits a prerendered ANSI art constant into lines.
+func splitPrerendered(art string) []string {
+	return strings.Split(art, "\n")
 }
 
 // renderLogo writes the embedded PNG to a temp file and runs chafa.
@@ -92,14 +119,13 @@ func renderLogo() []string {
 	}
 	tmp.Close()
 
-	cmd := exec.Command(chafaPath, "-s", "35x15", tmp.Name())
+	cmd := exec.Command(chafaPath, "-s", "70x30", "--symbols", "block", "--work", "9", tmp.Name())
 	out, err := cmd.Output()
 	if err != nil {
 		return nil
 	}
 
 	raw := strings.TrimRight(string(out), "\n")
-	// Strip chafa's cursor-hide/show sequences
 	raw = strings.ReplaceAll(raw, "\033[?25l", "")
 	raw = strings.ReplaceAll(raw, "\033[?25h", "")
 	raw = strings.TrimRight(raw, "\n")
@@ -109,26 +135,6 @@ func renderLogo() []string {
 		return nil
 	}
 	return lines
-}
-
-// bannerPlainText prints a minimal text-only banner for no-color mode.
-func bannerPlainText(w io.Writer, info BannerInfo) {
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "    StageFreight %s\n", info.Version)
-	if info.SHA != "" && info.Branch != "" {
-		fmt.Fprintf(w, "    %s · %s\n", info.SHA, info.Branch)
-	}
-	fmt.Fprintln(w)
-}
-
-// bannerColorText prints a styled text-only banner when chafa is unavailable.
-func bannerColorText(w io.Writer, info BannerInfo) {
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "    \033[1;36mStageFreight\033[0m \033[36m%s\033[0m\n", info.Version)
-	if info.SHA != "" && info.Branch != "" {
-		fmt.Fprintf(w, "    \033[36m%s\033[0m · \033[36m%s\033[0m\n", info.SHA, info.Branch)
-	}
-	fmt.Fprintln(w)
 }
 
 // NewBannerInfo creates a BannerInfo with today's date.
