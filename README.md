@@ -1,7 +1,3 @@
-[![release](https://img.shields.io/docker/v/prplanit/stagefreight?sort=semver&label=release)](https://hub.docker.com/r/prplanit/stagefreight)
-[![pulls](https://img.shields.io/docker/pulls/prplanit/stagefreight)](https://hub.docker.com/r/prplanit/stagefreight)
-[![license](https://img.shields.io/github/license/sofmeright/stagefreight)](LICENSE)
-
 <p align="center">
   <img src="src/assets/logo.png" width="220" alt="StageFreight">
 </p>
@@ -11,6 +7,12 @@
 > *Hello World's a Stage*
 
 A declarative CI/CD automation CLI that detects, builds, scans, and releases container images across forges and registries — from a single manifest. StageFreight is open-source, self-building, and replaces fragile shell-script CI pipelines with a single Go binary driven by one [`.stagefreight.yml`](.stagefreight.yml) file.
+
+<!-- sf:badges -->
+[![release](https://img.shields.io/docker/v/prplanit/stagefreight?sort=semver&label=release)](https://hub.docker.com/r/prplanit/stagefreight)
+[![pulls](https://img.shields.io/docker/pulls/prplanit/stagefreight)](https://hub.docker.com/r/prplanit/stagefreight)
+[![license](https://img.shields.io/github/license/sofmeright/stagefreight)](LICENSE)
+<!-- /sf:badges -->
 
 ### Features:
 
@@ -37,7 +39,7 @@ A declarative CI/CD automation CLI that detects, builds, scans, and releases con
 | ------------------- | --------------------------------------------------------------- |
 | Manifest Examples   | [24 Example Configs](docs/config/README.md)                     |
 | Roadmap             | [Full Vision](docs/RoadMap.md)                                  |
-| GitLab CI Component | [Docker Build](templates/stagefreight.yml) · [Component Release](templates/component-release.yml) |
+| GitLab CI Component | [Component Reference](docs/Component.md) · [Template](templates/stagefreight.yml) |
 
 ---
 
