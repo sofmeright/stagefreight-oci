@@ -238,18 +238,23 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 	output.SectionStart(w, "sf_build", "Build")
 	buildStart := time.Now()
 
-	// In CI, capture buildx output to suppress noise; use layer parsing for structured display
+	// Always capture output for structured display; verbose forwards stderr in real-time
 	bx := build.NewBuildx(verbose)
-	parseLayers := ci && !verbose
-	if parseLayers {
-		bx.Stdout = &bytes.Buffer{}
-		bx.Stderr = &bytes.Buffer{}
+	var stderrBuf bytes.Buffer
+	bx.Stdout = io.Discard
+	if verbose {
+		bx.Stderr = os.Stderr // BuildWithLayers MultiWriters this + its parse buffer
+	} else {
+		bx.Stderr = &stderrBuf
 	}
 
-	// Login to remote registries (skips local providers)
+	// Login to remote registries (suppress raw output)
 	for _, step := range plan.Steps {
 		if hasRemoteRegistries(step.Registries) {
-			if err := bx.Login(ctx, step.Registries); err != nil {
+			loginBx := *bx
+			loginBx.Stdout = io.Discard
+			loginBx.Stderr = io.Discard
+			if err := loginBx.Login(ctx, step.Registries); err != nil {
 				output.SectionEnd(w, "sf_build")
 				return err
 			}
@@ -257,29 +262,32 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Build each step
+	// Build each step — always parse layers for structured output
 	var result build.BuildResult
 	for _, step := range plan.Steps {
-		var stepResult *build.StepResult
-		var layers []build.LayerEvent
-		var err error
-
-		if parseLayers {
-			stepResult, layers, err = bx.BuildWithLayers(ctx, step)
-			if stepResult != nil {
-				stepResult.Layers = layers
-			}
-		} else {
-			stepResult, err = bx.Build(ctx, step)
+		stepResult, layers, err := bx.BuildWithLayers(ctx, step)
+		if stepResult != nil {
+			stepResult.Layers = layers
 		}
 
 		result.Steps = append(result.Steps, *stepResult)
 		if err != nil {
-			if parseLayers {
-				if buf, ok := bx.Stderr.(*bytes.Buffer); ok && buf.Len() > 0 {
-					fmt.Fprint(w, buf.String())
-				}
+			// Structured failure: render whatever layers completed
+			buildElapsed := time.Since(buildStart)
+			failSec := output.NewSection(w, "Build", buildElapsed, color)
+			renderBuildLayers(failSec, result.Steps, color)
+			output.RowStatus(failSec, "status", "build failed", "failed", color)
+			failSec.Close()
+
+			// Raw output: collapsed in CI, shown only if verbose locally
+			if ci {
+				output.SectionStartCollapsed(w, "sf_build_raw", "Build Output (raw)")
+				fmt.Fprint(w, stderrBuf.String())
+				output.SectionEnd(w, "sf_build_raw")
+			} else if verbose {
+				fmt.Fprint(os.Stderr, stderrBuf.String())
 			}
+
 			output.SectionEnd(w, "sf_build")
 			return err
 		}
@@ -290,23 +298,7 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 	buildSec := output.NewSection(w, "Build", buildElapsed, color)
 
 	// Render layer events if available
-	hasLayers := false
-	for _, sr := range result.Steps {
-		for _, layer := range sr.Layers {
-			instr := build.FormatLayerInstruction(layer)
-			timing := build.FormatLayerTiming(layer)
-
-			var label string
-			if layer.Instruction == "FROM" {
-				label = "base"
-			} else {
-				label = layer.Instruction
-			}
-			buildSec.Row("%-8s%-42s %s", label, instr, timing)
-			hasLayers = true
-		}
-	}
-	if hasLayers {
+	if renderBuildLayers(buildSec, result.Steps, color) {
 		buildSec.Separator()
 	}
 
@@ -333,7 +325,14 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 		output.SectionStart(w, "sf_push", "Push")
 		pushStart := time.Now()
 
-		if err := bx.PushTags(ctx, remoteTags); err != nil {
+		pushBx := *bx
+		pushBx.Stdout = io.Discard
+		if verbose {
+			pushBx.Stderr = os.Stderr
+		} else {
+			pushBx.Stderr = io.Discard
+		}
+		if err := pushBx.PushTags(ctx, remoteTags); err != nil {
 			pushElapsed = time.Since(pushStart)
 			output.SectionEnd(w, "sf_push")
 			return err
@@ -864,6 +863,33 @@ func runReadmeSyncSection(ctx context.Context, w io.Writer, _ bool, color bool, 
 	}
 
 	return summary, elapsed
+}
+
+// renderBuildLayers renders parsed layer events into a Section.
+// Returns true if any layers were rendered.
+func renderBuildLayers(sec *output.Section, steps []build.StepResult, color bool) bool {
+	hasLayers := false
+	for _, sr := range steps {
+		for _, layer := range sr.Layers {
+			instr := build.FormatLayerInstruction(layer)
+			timing := build.FormatLayerTiming(layer)
+
+			var label string
+			if layer.Instruction == "FROM" {
+				label = "base"
+			} else {
+				label = layer.Instruction
+			}
+
+			timingStr := timing
+			if layer.Cached {
+				timingStr = output.Dimmed("cached", color)
+			}
+			sec.Row("%-8s%-42s %s", label, instr, timingStr)
+			hasLayers = true
+		}
+	}
+	return hasLayers
 }
 
 // dockerHubFromConfig returns the namespace and repo for the first docker.io registry.
