@@ -15,4 +15,4 @@ include:
 ## Inputs
 
 <!-- sf:component -->
-<!-- /sf:component -->
+<!-- sf:component -->
