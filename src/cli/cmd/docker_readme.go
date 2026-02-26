@@ -153,6 +153,10 @@ func syncReadmeCollect(ctx context.Context, readmeCfg config.DockerReadmeConfig,
 		}
 
 		if err := client.UpdateDescription(ctx, reg.Path, short, content.Full); err != nil {
+			if registry.IsForbidden(err) {
+				results = append(results, readmeSyncResult{Registry: name, Status: "skipped", Detail: "forbidden (PAT cannot update descriptions; use password with 2FA disabled)"})
+				continue
+			}
 			results = append(results, readmeSyncResult{Registry: name, Status: "failed", Detail: err.Error(), Err: err})
 			fmt.Fprintf(os.Stderr, "readme: error %s: %v\n", name, err)
 			continue
@@ -215,6 +219,13 @@ func syncReadmeToRegistries(ctx context.Context, w io.Writer, readmeCfg config.D
 		}
 
 		if err := client.UpdateDescription(ctx, reg.Path, short, content.Full); err != nil {
+			if registry.IsForbidden(err) {
+				skipped++
+				if verbose {
+					fmt.Fprintf(w, "  readme: skip %s/%s (forbidden: PAT cannot update descriptions)\n", reg.URL, reg.Path)
+				}
+				continue
+			}
 			fmt.Fprintf(w, "  readme: error %s/%s: %v\n", reg.URL, reg.Path, err)
 			errors++
 			continue

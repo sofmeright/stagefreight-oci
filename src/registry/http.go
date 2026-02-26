@@ -4,10 +4,23 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 )
+
+// HTTPError represents an HTTP response with a non-success status code.
+type HTTPError struct {
+	StatusCode int
+	Method     string
+	URL        string
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("%s %s: %d %s", e.Method, e.URL, e.StatusCode, e.Body)
+}
 
 // httpClient is a thin wrapper for JSON API calls used by all providers.
 type httpClient struct {
@@ -47,7 +60,7 @@ func (c *httpClient) doJSON(ctx context.Context, method, url string, body interf
 	respBody, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode >= 400 {
-		return resp, fmt.Errorf("%s %s: %d %s", method, url, resp.StatusCode, truncateBody(respBody, 512))
+		return resp, &HTTPError{StatusCode: resp.StatusCode, Method: method, URL: url, Body: truncateBody(respBody, 512)}
 	}
 
 	if result != nil && len(respBody) > 0 {
@@ -77,7 +90,7 @@ func (c *httpClient) doRaw(ctx context.Context, method, url string) (*http.Respo
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("%s %s: %d %s", method, url, resp.StatusCode, truncateBody(body, 512))
+		return nil, &HTTPError{StatusCode: resp.StatusCode, Method: method, URL: url, Body: truncateBody(body, 512)}
 	}
 
 	return resp, nil
@@ -88,4 +101,13 @@ func truncateBody(b []byte, max int) string {
 		return string(b)
 	}
 	return string(b[:max]) + "..."
+}
+
+// IsForbidden returns true if the error chain contains an HTTP 403 response.
+func IsForbidden(err error) bool {
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode == 403
+	}
+	return false
 }
