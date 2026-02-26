@@ -9,7 +9,9 @@ import (
 // ResolveDetailLevel evaluates the security detail rules against the current
 // tag and branch to determine which detail level to use in release notes.
 // CLI override (if non-empty) takes precedence over all rules.
-func ResolveDetailLevel(cfg config.SecurityConfig, cliOverride string) string {
+// Policy is used for future condition resolution but currently rules use
+// direct regex patterns via Condition.
+func ResolveDetailLevel(cfg config.SecurityConfig, cliOverride string, policy config.GitPolicyConfig) string {
 	if cliOverride != "" {
 		return cliOverride
 	}

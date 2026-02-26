@@ -16,6 +16,12 @@ func init() {
 	build.Register("image", func() build.Engine { return &imageEngine{} })
 }
 
+// ImagePlanInput bundles the config needed for image build planning.
+type ImagePlanInput struct {
+	Docker *config.DockerConfig
+	Policy config.GitPolicyConfig
+}
+
 // imageEngine builds container images and pushes to registries.
 type imageEngine struct{}
 
@@ -26,10 +32,12 @@ func (e *imageEngine) Detect(ctx context.Context, rootDir string) (*build.Detect
 }
 
 func (e *imageEngine) Plan(ctx context.Context, cfgRaw interface{}, det *build.Detection) (*build.BuildPlan, error) {
-	cfg, ok := cfgRaw.(*config.DockerConfig)
+	input, ok := cfgRaw.(*ImagePlanInput)
 	if !ok {
-		return nil, fmt.Errorf("image engine: expected *config.DockerConfig, got %T", cfgRaw)
+		return nil, fmt.Errorf("image engine: expected *ImagePlanInput, got %T", cfgRaw)
 	}
+	cfg := input.Docker
+	policy := input.Policy
 
 	plan := &build.BuildPlan{}
 
@@ -83,7 +91,7 @@ func (e *imageEngine) Plan(ctx context.Context, cfgRaw interface{}, det *build.D
 				return nil, fmt.Errorf("registry[%d] (%s/%s): %v", i, reg.URL, reg.Path, errs)
 			}
 
-			if !registryAllowed(reg, currentBranch, currentGitTag) {
+			if !registryAllowed(reg, currentBranch, currentGitTag, policy) {
 				continue
 			}
 
@@ -178,14 +186,14 @@ func resolveBranch(det *build.Detection, v *build.VersionInfo) string {
 }
 
 // registryAllowed checks if the current branch and git tag permit pushing to a registry.
-// Uses the standard MatchPatterns from config — supports regex and ! negation.
+// Uses policy-aware pattern matching — supports regex, ! negation, and policy name resolution.
 // Empty patterns = no filter (always allowed).
-func registryAllowed(reg config.RegistryConfig, branch, gitTag string) bool {
-	if !config.MatchPatterns(reg.Branches, branch) {
+func registryAllowed(reg config.RegistryConfig, branch, gitTag string, policy config.GitPolicyConfig) bool {
+	if !config.MatchPatternsWithPolicy(reg.Branches, branch, policy.Branches) {
 		return false
 	}
 	// If registry specifies git_tags filters, require a matching git tag
-	if len(reg.GitTags) > 0 && (gitTag == "" || !config.MatchPatterns(reg.GitTags, gitTag)) {
+	if len(reg.GitTags) > 0 && (gitTag == "" || !config.MatchPatternsWithPolicy(reg.GitTags, gitTag, policy.Tags)) {
 		return false
 	}
 	return true

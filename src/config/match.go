@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -131,4 +132,177 @@ func MatchPatterns(patterns []string, value string) bool {
 	}
 
 	return false
+}
+
+// ── Policy-aware pattern matching ─────────────────────────────────────────
+
+// identifierRe matches valid policy key names: letter-first, alphanumeric + _ . -
+var identifierRe = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_.\-]*$`)
+
+// regexMetaChars are characters that indicate a string is an intentional regex, not a typo.
+const regexMetaChars = `^$.*+?()[]{}|\`
+
+// isIdentifier returns true if s looks like a policy name (letter-first identifier).
+func isIdentifier(s string) bool {
+	return identifierRe.MatchString(s)
+}
+
+// containsRegexMeta returns true if s contains any regex metacharacters.
+func containsRegexMeta(s string) bool {
+	for _, c := range s {
+		if strings.ContainsRune(regexMetaChars, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// CompiledPatterns holds pre-compiled include and exclude regex patterns.
+// Avoids repeated regex compilation during planning and matching.
+type CompiledPatterns struct {
+	Include []*regexp.Regexp
+	Exclude []*regexp.Regexp
+}
+
+// Match evaluates the compiled patterns against a value.
+// Exclude-first semantics: if any exclude matches, rejected.
+// Empty include list with no excludes = pass (no constraints).
+// Empty include list with only excludes = everything not excluded passes.
+func (cp *CompiledPatterns) Match(value string) bool {
+	if cp == nil {
+		return true
+	}
+
+	// Excludes checked first
+	for _, re := range cp.Exclude {
+		if re.MatchString(value) {
+			return false
+		}
+	}
+
+	// No includes = no positive filter (pass)
+	if len(cp.Include) == 0 {
+		return true
+	}
+
+	// Any include match = allowed
+	for _, re := range cp.Include {
+		if re.MatchString(value) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// CompilePatterns resolves pattern tokens against a policy map and compiles
+// them into include/exclude regex groups. Discards warnings.
+func CompilePatterns(patterns []string, policyMap map[string]string) (*CompiledPatterns, error) {
+	cp, _, err := CompilePatternsWithWarnings(patterns, policyMap)
+	return cp, err
+}
+
+// CompilePatternsWithWarnings resolves pattern tokens against a policy map,
+// compiles them into include/exclude regex groups, and returns any warnings
+// (e.g., typo detection for unknown policy names).
+func CompilePatternsWithWarnings(patterns []string, policyMap map[string]string) (*CompiledPatterns, []string, error) {
+	if len(patterns) == 0 {
+		return &CompiledPatterns{}, nil, nil
+	}
+
+	resolved := ResolvePatterns(patterns, policyMap)
+	var warnings []string
+
+	// Collect typo warnings from resolution
+	for _, token := range patterns {
+		raw := token
+		if strings.HasPrefix(raw, "!") {
+			raw = raw[1:]
+		}
+		_, warn := resolveTokenWithWarning(raw, policyMap)
+		if warn != "" {
+			warnings = append(warnings, warn)
+		}
+	}
+
+	cp := &CompiledPatterns{}
+	for _, p := range resolved {
+		negate := false
+		pat := p
+		if strings.HasPrefix(pat, "!") {
+			negate = true
+			pat = pat[1:]
+		}
+
+		re, err := regexp.Compile(pat)
+		if err != nil {
+			return nil, warnings, fmt.Errorf("invalid pattern %q: %w", pat, err)
+		}
+
+		if negate {
+			cp.Exclude = append(cp.Exclude, re)
+		} else {
+			cp.Include = append(cp.Include, re)
+		}
+	}
+
+	return cp, warnings, nil
+}
+
+// ResolvePatterns resolves policy name tokens in a pattern list to their
+// regex values from the policy map. Direct regex patterns pass through unchanged.
+// Negation prefix (!) is preserved.
+func ResolvePatterns(patterns []string, policyMap map[string]string) []string {
+	if len(patterns) == 0 {
+		return nil
+	}
+
+	resolved := make([]string, 0, len(patterns))
+	for _, token := range patterns {
+		negate := false
+		raw := token
+		if strings.HasPrefix(raw, "!") {
+			negate = true
+			raw = raw[1:]
+		}
+
+		// Try to resolve as policy name
+		val, _ := resolveTokenWithWarning(raw, policyMap)
+
+		prefix := ""
+		if negate {
+			prefix = "!"
+		}
+		resolved = append(resolved, prefix+val)
+	}
+	return resolved
+}
+
+// resolveTokenWithWarning resolves a single token against the policy map.
+// Returns the resolved pattern and an optional warning string.
+func resolveTokenWithWarning(token string, policyMap map[string]string) (string, string) {
+	// If it's an identifier and exists in policy map, resolve it
+	if isIdentifier(token) {
+		if regex, ok := policyMap[token]; ok {
+			return regex, ""
+		}
+		// Identifier-like but not in policy map
+		if !containsRegexMeta(token) {
+			// Looks like a typo — identifier-like, not in map, no metacharacters
+			return token, fmt.Sprintf("unknown policy name %q; treating as regex", token)
+		}
+	}
+
+	// Not an identifier or contains metacharacters — pass through as regex
+	return token, ""
+}
+
+// MatchPatternsWithPolicy resolves policy names and evaluates patterns against a value.
+// Convenience wrapper combining ResolvePatterns + MatchPatterns.
+func MatchPatternsWithPolicy(patterns []string, value string, policyMap map[string]string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	resolved := ResolvePatterns(patterns, policyMap)
+	return MatchPatterns(resolved, value)
 }

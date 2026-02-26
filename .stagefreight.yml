@@ -1,50 +1,69 @@
-version: 1
+sources:
+  primary:
+    kind: git
+    worktree: "."
+    url: "https://github.com/sofmeright/stagefreight"
+    default_branch: "main"
 
-badges:
-  font: dejavu-sans
-  font_size: 11
-  items:
-    - name: release
-      label: release
-      color: "#74ecbe"
-      output: .stagefreight/badges/release.svg
-    - name: build
-      label: build
-      value: "{env:BUILD_STATUS}"
-      color: auto
-      font: monofur
-      output: .stagefreight/badges/build.svg
-    - name: license
-      label: license
-      value: "AGPL-3.0+"
-      color: "#310937"
-      font: monofur
-      output: .stagefreight/badges/license.svg
-    - name: updated
-      label: updated
-      value: "{env:BUILD_DATE}"
-      color: "#236144"
-      output: .stagefreight/badges/updated.svg
+git:
+  policy:
+    tags:
+      stable: "^\\d+\\.\\d+\\.\\d+$"
+      prerelease: "^\\d+\\.\\d+\\.\\d+-.+"
+    branches:
+      main: "^main$"
+  narrator:
+    link_base: "https://github.com/sofmeright/stagefreight/blob/main"
+    badges:
+      font: dejavu-sans
+      font_size: 11
+    files:
+      - id: readme
+        path: "README.md"
+        sections:
+          - id: readme.badges
+            name: badges
+            inline: true
+            items:
+              - id: badge.release
+                badge: release
+                color: "#74ecbe"
+                output: ".stagefreight/badges/release.svg"
+                link: "https://github.com/sofmeright/stagefreight/releases"
+              - id: badge.build
+                badge: build
+                value: "{env:BUILD_STATUS}"
+                color: auto
+                font: monofur
+                output: ".stagefreight/badges/build.svg"
+                link: "https://github.com/sofmeright/stagefreight/actions"
+              - id: badge.license
+                badge: license
+                value: "AGPL-3.0+"
+                color: "#310937"
+                font: monofur
+                output: ".stagefreight/badges/license.svg"
+                link: LICENSE
+              - id: badge.updated
+                badge: updated
+                value: "{env:BUILD_DATE}"
+                color: "#236144"
+                output: ".stagefreight/badges/updated.svg"
+              - id: shield.pulls
+                shield: docker/pulls/prplanit/stagefreight
+                link: "https://hub.docker.com/r/prplanit/stagefreight"
+      - id: component-docs
+        path: "docs/Component.md"
+        sections:
+          - id: component-docs.inputs
+            name: component
+            items:
+              - component: "templates/stagefreight.yml"
 
 docker:
   readme:
     description: "Declarative CI/CD CLI — detect, build, scan, and release container images from one manifest"
-    link_base: "https://github.com/sofmeright/stagefreight/blob/main"
-    badges:
-      - alt: release
-        file: ".stagefreight/badges/release.svg"
-        link: "https://github.com/sofmeright/stagefreight/releases"
-      - alt: build
-        file: ".stagefreight/badges/build.svg"
-        link: "https://github.com/sofmeright/stagefreight/actions"
-      - alt: license
-        file: ".stagefreight/badges/license.svg"
-        link: LICENSE
-      - alt: updated
-        file: ".stagefreight/badges/updated.svg"
-      - alt: pulls
-        url: "https://img.shields.io/docker/pulls/prplanit/stagefreight"
-        link: "https://hub.docker.com/r/prplanit/stagefreight"
+    file: "README.md"
 
   platforms: [linux/amd64]
 
@@ -59,7 +78,7 @@ docker:
         - "{major}.{minor}"    # 0.2
         - "{major}"            # 0
         - "latest"
-      git_tags: ["^\\d+\\.\\d+\\.\\d+$"]
+      git_tags: [stable]
       credentials: DOCKER
 
     # ── Docker Hub: pre-releases (alpha/beta/rc) ────────────────────
@@ -68,20 +87,25 @@ docker:
       path: prplanit/stagefreight
       tags:
         - "{version}"          # 0.2.0-alpha.1
-      git_tags: ["\\d+\\.\\d+\\.\\d+-.+"]
+      git_tags: [prerelease]
       credentials: DOCKER
 
     # ── Docker Hub: dev builds on every commit ───────────────────────
     # Ephemeral builds for testing. No git tag required.
-    # Retention keeps last 5 dev tags (sha-tagged only; latest-dev is excluded).
+    # Retention keeps last 6 dev tags (sha-tagged only; latest-dev is excluded).
     - url: docker.io
       path: prplanit/stagefreight
       tags:
         - "dev-{sha:8}"               # dev-abc12345
         - "latest-dev"                 # always points to newest dev build
-      branches: ["^main$"]
+      branches: [main]
       credentials: DOCKER
       retention: 6
+
+gitlab_component:
+  spec_files:
+    - "templates/stagefreight.yml"
+  catalog: true
 
 lint:
   level: full
@@ -102,11 +126,3 @@ lint:
       enabled: true
     largefiles:
       enabled: true
-
-component:
-  spec_files:
-    - "templates/stagefreight.yml"
-    - "templates/component-release.yml"
-  readme:
-    file: "README.md"
-  catalog: true

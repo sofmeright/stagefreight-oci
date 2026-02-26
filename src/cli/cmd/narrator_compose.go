@@ -35,6 +35,7 @@ Items are specified as type:value pairs with optional comma-separated fields:
   badge:<alt>,file:<path>,link:<url>
   shield:<path>,link:<url>,label:<text>
   text:<markdown content>
+  component:<spec-file-path>
   break:
 
 Examples:
@@ -78,8 +79,8 @@ func runNarratorCompose(cmd *cobra.Command, args []string) error {
 	}
 
 	// Resolve URL bases from narrator config (if available).
-	linkBase := strings.TrimRight(cfg.Narrator.LinkBase, "/")
-	rawBase := cfg.Narrator.RawBase
+	linkBase := strings.TrimRight(cfg.Git.Narrator.LinkBase, "/")
+	rawBase := cfg.Git.Narrator.RawBase
 	if rawBase == "" && linkBase != "" {
 		rawBase = registry.DeriveRawBase(linkBase)
 	}
@@ -268,6 +269,14 @@ func parseCLIItem(arg string) (config.NarratorItem, error) {
 		}
 		return item, nil
 
+	case "component":
+		// component:<spec-file-path>
+		if rest == "" {
+			return item, fmt.Errorf("component requires a spec file path")
+		}
+		item.Component = rest
+		return item, nil
+
 	default:
 		return item, fmt.Errorf("unknown module type %q", moduleType)
 	}
@@ -277,7 +286,7 @@ func parseCLIItem(arg string) (config.NarratorItem, error) {
 // colons (like URLs). A field boundary is a comma followed by a known field name
 // and colon.
 func splitFields(s string) []string {
-	knownFields := []string{"file:", "url:", "link:", "label:"}
+	knownFields := []string{"file:", "url:", "link:", "label:", "component:"}
 
 	var fields []string
 	start := 0

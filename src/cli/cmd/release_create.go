@@ -186,7 +186,7 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Add GitLab Catalog link
-	if rcCatalogLinks && cfg.Component.Catalog && provider == forge.GitLab {
+	if rcCatalogLinks && cfg.GitlabComponent.Catalog && provider == forge.GitLab {
 		catalogLink := buildCatalogLink(remoteURL, tag)
 		if catalogLink.URL != "" {
 			if err := forgeClient.AddReleaseLink(ctx, rel.ID, catalogLink); err != nil {
@@ -201,7 +201,7 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 	if len(cfg.Release.Tags) > 0 {
 		currentTag := os.Getenv("CI_COMMIT_TAG")
 		// Check if the current tag matches git_tags filter
-		if config.MatchPatterns(cfg.Release.GitTags, currentTag) || currentTag == "" {
+		if config.MatchPatternsWithPolicy(cfg.Release.GitTags, currentTag, cfg.Git.Policy.Tags) || currentTag == "" {
 			rollingTags := gitver.ResolveTags(cfg.Release.Tags, versionInfo)
 			for _, rt := range rollingTags {
 				if rt == tag || rt == "" {
@@ -237,7 +237,7 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 		currentTag := os.Getenv("CI_COMMIT_TAG")
 		currentBranch := resolveBranchFromEnv()
 		for _, target := range cfg.Release.Sync {
-			if !syncAllowed(target, currentTag, currentBranch) {
+			if !syncAllowed(target, currentTag, currentBranch, cfg.Git.Policy) {
 				if verbose {
 					fmt.Fprintf(os.Stderr, "  skip sync: %s (tag=%q branch=%q not allowed)\n", target.Name, currentTag, currentBranch)
 				}
@@ -454,12 +454,12 @@ func projectPathFromRemote(remoteURL string) string {
 }
 
 // syncAllowed checks if a sync target should be activated for the current tag/branch.
-// Uses the standard MatchPatterns from config — supports regex and ! negation.
-func syncAllowed(target config.SyncTarget, tag, branch string) bool {
-	if !config.MatchPatterns(target.Branches, branch) {
+// Uses policy-aware pattern matching — supports regex, ! negation, and policy name resolution.
+func syncAllowed(target config.SyncTarget, tag, branch string, policy config.GitPolicyConfig) bool {
+	if !config.MatchPatternsWithPolicy(target.Branches, branch, policy.Branches) {
 		return false
 	}
-	if tag != "" && !config.MatchPatterns(target.Tags, tag) {
+	if tag != "" && !config.MatchPatternsWithPolicy(target.Tags, tag, policy.Tags) {
 		return false
 	}
 	return true

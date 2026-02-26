@@ -23,10 +23,14 @@ var rootCmd = &cobra.Command{
 		if cmd.Name() == "version" {
 			return nil
 		}
+		var warnings []string
 		var err error
-		cfg, err = config.Load(cfgFile)
+		cfg, warnings, err = config.LoadWithWarnings(cfgFile)
 		if err != nil {
 			return fmt.Errorf("loading config: %w", err)
+		}
+		for _, w := range warnings {
+			fmt.Fprintf(os.Stderr, "  warning: %s\n", w)
 		}
 		return nil
 	},

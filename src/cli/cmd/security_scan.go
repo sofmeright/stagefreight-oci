@@ -97,7 +97,7 @@ func runSecurityScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Resolve detail level from rules (CLI override > tag/branch rules > default)
-	detail := security.ResolveDetailLevel(cfg.Security, secScanDetail)
+	detail := security.ResolveDetailLevel(cfg.Security, secScanDetail, cfg.Git.Policy)
 
 	// Build and write summary
 	summary := security.BuildSummary(result, detail)

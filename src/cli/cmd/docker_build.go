@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/sofmeright/stagefreight/src/badge"
 	"github.com/sofmeright/stagefreight/src/build"
-	_ "github.com/sofmeright/stagefreight/src/build/engines"
+	"github.com/sofmeright/stagefreight/src/build/engines"
 	"github.com/sofmeright/stagefreight/src/config"
 	"github.com/sofmeright/stagefreight/src/gitver"
 	"github.com/sofmeright/stagefreight/src/lint"
@@ -146,7 +146,7 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	plan, err := engine.Plan(ctx, &dockerCfg, det)
+	plan, err := engine.Plan(ctx, &engines.ImagePlanInput{Docker: &dockerCfg, Policy: cfg.Git.Policy}, det)
 	if err != nil {
 		output.SectionEnd(w, "sf_plan")
 		return fmt.Errorf("planning: %w", err)
@@ -360,7 +360,7 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 
 	// --- Badges ---
 	var badgeSummary string
-	if len(cfg.Badges.Items) > 0 {
+	if hasNarratorBadgeItems() {
 		badgeSummary, _ = runBadgeSection(w, color, rootDir)
 	}
 
@@ -691,13 +691,42 @@ func buildContextKV() []output.KV {
 	return kv
 }
 
+// hasNarratorBadgeItems returns true if any narrator item has badge generation configured.
+func hasNarratorBadgeItems() bool {
+	for _, f := range cfg.Git.Narrator.Files {
+		for _, s := range f.Sections {
+			for _, item := range s.Items {
+				if item.HasGeneration() {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// collectNarratorBadgeItems returns all narrator items with badge generation.
+func collectNarratorBadgeItems() []config.NarratorItem {
+	var items []config.NarratorItem
+	for _, f := range cfg.Git.Narrator.Files {
+		for _, s := range f.Sections {
+			for _, item := range s.Items {
+				if item.HasGeneration() {
+					items = append(items, item)
+				}
+			}
+		}
+	}
+	return items
+}
+
 // runBadgeSection generates configured badges with section-formatted output.
 func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Duration) {
-	bcfg := cfg.Badges
+	defaults := cfg.Git.Narrator.Badges
 	output.SectionStartCollapsed(w, "sf_badges", "Badges")
 	start := time.Now()
 
-	eng, err := buildBadgeEngine()
+	eng, err := buildBadgeEngine(defaults)
 	if err != nil {
 		elapsed := time.Since(start)
 		sec := output.NewSection(w, "Badges", elapsed, color)
@@ -707,12 +736,14 @@ func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Dura
 		return fmt.Sprintf("error: %v", err), elapsed
 	}
 
+	items := collectNarratorBadgeItems()
+
 	// Detect version for template resolution
 	vi, _ := build.DetectVersion(rootDir)
 
 	// Lazy Docker Hub info — only fetch if any badge value uses {docker.*}
 	var dockerInfo *gitver.DockerHubInfo
-	for _, item := range bcfg.Items {
+	for _, item := range items {
 		if strings.Contains(item.Value, "{docker.") {
 			ns, repo := dockerHubFromConfig()
 			if ns != "" && repo != "" {
@@ -723,11 +754,13 @@ func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Dura
 	}
 
 	var generated int
-	for _, item := range bcfg.Items {
+	for _, item := range items {
+		spec := item.ToBadgeSpec()
+
 		// Per-item engine if font is overridden
 		itemEng := eng
-		if item.Font != "" || item.FontFile != "" || item.FontSize != 0 {
-			override, oErr := buildItemEngine(item, bcfg)
+		if spec.Font != "" || spec.FontFile != "" || spec.FontSize != 0 {
+			override, oErr := buildItemEngine(spec, defaults)
 			if oErr != nil {
 				continue
 			}
@@ -735,34 +768,28 @@ func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Dura
 		}
 
 		// Resolve value templates
-		value := item.Value
+		value := spec.Value
 		if vi != nil && value != "" {
 			value = gitver.ResolveTemplateWithDir(value, vi, rootDir)
 		}
 		value = gitver.ResolveDockerTemplates(value, dockerInfo)
 
 		// Resolve color
-		badgeColor := item.Color
+		badgeColor := spec.Color
 		if badgeColor == "" || badgeColor == "auto" {
 			badgeColor = badge.StatusColor("passed")
 		}
 
-		// Resolve output path
-		outPath := item.Output
-		if outPath == "" {
-			outPath = fmt.Sprintf(".stagefreight/badges/%s.svg", item.Name)
-		}
-
 		svg := itemEng.Generate(badge.Badge{
-			Label: item.Label,
+			Label: spec.Label,
 			Value: value,
 			Color: badgeColor,
 		})
 
-		if mkErr := os.MkdirAll(filepath.Dir(outPath), 0o755); mkErr != nil {
+		if mkErr := os.MkdirAll(filepath.Dir(spec.Output), 0o755); mkErr != nil {
 			continue
 		}
-		if wErr := os.WriteFile(outPath, []byte(svg), 0o644); wErr != nil {
+		if wErr := os.WriteFile(spec.Output, []byte(svg), 0o644); wErr != nil {
 			continue
 		}
 		generated++
@@ -770,30 +797,27 @@ func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Dura
 
 	elapsed := time.Since(start)
 	sec := output.NewSection(w, "Badges", elapsed, color)
-	for _, item := range bcfg.Items {
-		fontName := item.Font
+	for _, item := range items {
+		spec := item.ToBadgeSpec()
+		fontName := spec.Font
 		if fontName == "" {
-			fontName = bcfg.Font
+			fontName = defaults.Font
 		}
 		if fontName == "" {
 			fontName = "dejavu-sans"
 		}
-		size := item.FontSize
+		size := spec.FontSize
 		if size == 0 {
-			size = bcfg.FontSize
+			size = defaults.FontSize
 		}
 		if size == 0 {
 			size = 11
 		}
-		badgeColor := item.Color
+		badgeColor := spec.Color
 		if badgeColor == "" {
 			badgeColor = "auto"
 		}
-		outPath := item.Output
-		if outPath == "" {
-			outPath = fmt.Sprintf(".stagefreight/badges/%s.svg", item.Name)
-		}
-		sec.Row("%-16s%-24s %-8s %.0fpt  %s", item.Name, outPath, fontName, size, badgeColor)
+		sec.Row("%-16s%-24s %-8s %.0fpt  %s", item.Badge, spec.Output, fontName, size, badgeColor)
 	}
 	sec.Close()
 	output.SectionEnd(w, "sf_badges")
@@ -828,12 +852,7 @@ func runReadmeSyncSection(ctx context.Context, w io.Writer, _ bool, color bool, 
 		}
 		switch provider {
 		case "dockerhub", "quay", "harbor":
-			badgeCount := len(readmeCfg.Badges)
-			if badgeCount > 0 {
-				sec.Row("%-40ssynced (%d badges)", reg.URL+"/"+reg.Path, badgeCount)
-			} else {
-				sec.Row("%-40ssynced", reg.URL+"/"+reg.Path)
-			}
+			sec.Row("%-40ssynced", reg.URL+"/"+reg.Path)
 		}
 	}
 	sec.Close()

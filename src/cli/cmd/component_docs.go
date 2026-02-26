@@ -12,7 +12,6 @@ import (
 
 var (
 	cdSpecs      []string
-	cdReadme     string
 	cdOutputFile string
 	cdCommit     bool
 	cdBranch     string
@@ -30,7 +29,6 @@ Supports custom group metadata via comments:
 
 Output modes:
   - Default: print markdown to stdout
-  - --readme: inject into README between marker comments
   - --output: write markdown to a file
   - --commit: commit updated README via forge API (no local clone needed)`,
 	RunE: runComponentDocs,
@@ -38,10 +36,9 @@ Output modes:
 
 func init() {
 	componentDocsCmd.Flags().StringSliceVar(&cdSpecs, "spec", nil, "component spec file(s) to parse (repeatable)")
-	componentDocsCmd.Flags().StringVar(&cdReadme, "readme", "", "inject docs into this README file")
 	componentDocsCmd.Flags().StringVarP(&cdOutputFile, "output", "o", "", "write docs to file")
 	componentDocsCmd.Flags().BoolVar(&cdCommit, "commit", false, "commit updated README via forge API")
-	componentDocsCmd.Flags().StringVar(&cdBranch, "branch", "", "branch to commit to (default: from config)")
+	componentDocsCmd.Flags().StringVar(&cdBranch, "branch", "", "branch to commit to")
 
 	componentCmd.AddCommand(componentDocsCmd)
 }
@@ -55,10 +52,10 @@ func runComponentDocs(cmd *cobra.Command, args []string) error {
 	// Resolve spec files: CLI flags → config → error.
 	specFiles := cdSpecs
 	if len(specFiles) == 0 {
-		specFiles = cfg.Component.SpecFiles
+		specFiles = cfg.GitlabComponent.SpecFiles
 	}
 	if len(specFiles) == 0 {
-		return fmt.Errorf("no spec files specified; use --spec or configure component.spec_files in .stagefreight.yml")
+		return fmt.Errorf("no spec files specified; use --spec or configure gitlab_component.spec_files in .stagefreight.yml")
 	}
 
 	// Parse all spec files.
@@ -86,32 +83,6 @@ func runComponentDocs(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Output mode: --readme injection
-	readmePath := cdReadme
-	if readmePath == "" && cdCommit {
-		readmePath = cfg.Component.Readme.File
-	}
-
-	if readmePath != "" {
-		section := cfg.Component.Readme.Section
-
-		updated, err := component.InjectIntoReadme(readmePath, section, docs)
-		if err != nil {
-			return fmt.Errorf("injecting into README: %w", err)
-		}
-
-		if cdCommit {
-			return commitReadme(rootDir, readmePath, updated)
-		}
-
-		// Write locally.
-		if err := os.WriteFile(readmePath, []byte(updated), 0o644); err != nil {
-			return fmt.Errorf("writing README: %w", err)
-		}
-		fmt.Printf("  docs injected → %s\n", readmePath)
-		return nil
-	}
-
 	// Default: stdout.
 	fmt.Print(docs)
 	return nil
@@ -133,9 +104,6 @@ func commitReadme(rootDir, readmePath, content string) error {
 	}
 
 	branch := cdBranch
-	if branch == "" {
-		branch = cfg.Component.Readme.Branch
-	}
 
 	if err := forgeClient.CommitFile(ctx, forge.CommitFileOptions{
 		Branch:  branch,

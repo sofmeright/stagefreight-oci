@@ -2,38 +2,30 @@ package config
 
 // DockerConfig holds docker build configuration.
 type DockerConfig struct {
-	Context    string            `yaml:"context"`
-	Dockerfile string            `yaml:"dockerfile"`
-	Target     string            `yaml:"target"`
-	Platforms  []string          `yaml:"platforms"`
-	BuildArgs  map[string]string `yaml:"build_args"`
-	Registries []RegistryConfig  `yaml:"registries"`
-	Cache      CacheConfig       `yaml:"cache"`
+	Context    string             `yaml:"context"`
+	Dockerfile string             `yaml:"dockerfile"`
+	Target     string             `yaml:"target"`
+	Platforms  []string           `yaml:"platforms"`
+	BuildArgs  map[string]string  `yaml:"build_args"`
+	Registries []RegistryConfig   `yaml:"registries"`
+	Cache      CacheConfig        `yaml:"cache"`
 	Readme     DockerReadmeConfig `yaml:"readme"`
 }
 
 // DockerReadmeConfig controls README sync to container registries.
+// This is a destination sync policy — it adapts canonical content (composed by
+// git.narrator) for registry constraints. It must NOT choose sections/modules
+// or compose badges.
 type DockerReadmeConfig struct {
 	Enabled     *bool           `yaml:"enabled"`
 	File        string          `yaml:"file"`
 	Description string          `yaml:"description"`
 	LinkBase    string          `yaml:"link_base"`
 	RawBase     string          `yaml:"raw_base"`
-	Badges      []BadgeEntry    `yaml:"badges"`
 	Markers     *bool           `yaml:"markers"`
 	StartMarker string          `yaml:"start_marker"`
 	EndMarker   string          `yaml:"end_marker"`
 	Transforms  []TransformRule `yaml:"transforms"`
-}
-
-// BadgeEntry defines a single badge for narrator-driven injection into synced READMEs.
-// Exactly one of File or URL must be set per entry.
-type BadgeEntry struct {
-	Alt     string `yaml:"alt"`     // image alt text
-	File    string `yaml:"file"`    // relative path to committed SVG (resolved via raw_base)
-	URL     string `yaml:"url"`     // absolute image URL (shields.io, etc.)
-	Link    string `yaml:"link"`    // click target (absolute URL or relative path resolved via link_base)
-	Section string `yaml:"section"` // target section name (default: "badges")
 }
 
 // TransformRule defines a regex find/replace applied to README content.
@@ -49,7 +41,7 @@ func (r DockerReadmeConfig) IsActive() bool {
 	}
 	return r.File != "" || r.Description != "" || r.LinkBase != "" ||
 		r.Markers != nil || r.StartMarker != "" || r.EndMarker != "" ||
-		len(r.Transforms) > 0 || len(r.Badges) > 0
+		len(r.Transforms) > 0
 }
 
 // RegistryConfig defines a registry push target.
@@ -63,19 +55,14 @@ type RegistryConfig struct {
 
 	// Branches controls which branches push to this registry.
 	// Uses standard pattern syntax: regex, literal, or !negated.
-	// Empty = always push. Examples:
-	//   ["^main$"]                    — only main
-	//   ["^main$", "^release/.*"]     — main or release branches
-	//   ["!^develop$"]                — everything except develop
-	//   ["^main$", "!^.*-wip$"]       — main, but not if it ends in -wip
+	// Supports policy name resolution (e.g., "main" → resolved from git.policy.branches).
+	// Empty = always push.
 	Branches []string `yaml:"branches"`
 
 	// GitTags controls which git tags trigger a push to this registry.
 	// Uses standard pattern syntax: regex, literal, or !negated.
-	// Empty = all tags (no filter). Examples:
-	//   ["^v\\d+\\.\\d+\\.\\d+$"]     — stable semver only
-	//   ["!^v.*-rc"]                   — exclude release candidates
-	//   ["^v.*", "!^v.*-alpha"]        — all v-prefixed except alpha
+	// Supports policy name resolution (e.g., "stable" → resolved from git.policy.tags).
+	// Empty = all tags (no filter).
 	GitTags []string `yaml:"git_tags"`
 
 	// Retention controls cleanup of old tags after a successful push.

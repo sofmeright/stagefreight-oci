@@ -24,9 +24,9 @@ var (
 var badgeGenerateCmd = &cobra.Command{
 	Use:   "generate [name...]",
 	Short: "Generate SVG badges from config or flags",
-	Long: `Generate SVG badges defined in the badges config section.
+	Long: `Generate SVG badges defined in narrator config items.
 
-Config-driven (no flags): generates all configured badge items, or named items if specified.
+Config-driven (no flags): generates all narrator badge items with output paths, or named items if specified.
 Ad-hoc (--label + --value): generates a single badge from flags.`,
 	RunE: runBadgeGenerate,
 }
@@ -42,7 +42,8 @@ func init() {
 }
 
 func runBadgeGenerate(cmd *cobra.Command, args []string) error {
-	eng, err := buildBadgeEngine()
+	defaults := cfg.Git.Narrator.Badges
+	eng, err := buildBadgeEngine(defaults)
 	if err != nil {
 		return err
 	}
@@ -53,23 +54,22 @@ func runBadgeGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Config-driven mode
-	return generateConfigBadges(eng, args)
+	return generateConfigBadges(eng, defaults, args)
 }
 
-func buildBadgeEngine() (*badge.Engine, error) {
+func buildBadgeEngine(defaults config.NarratorBadgeDefaults) (*badge.Engine, error) {
 	var metrics *badge.FontMetrics
 	var err error
 
-	bcfg := cfg.Badges
-	size := bcfg.FontSize
+	size := defaults.FontSize
 	if size == 0 {
 		size = 11
 	}
 
-	if bcfg.FontFile != "" {
-		metrics, err = badge.LoadFontFile(bcfg.FontFile, size)
+	if defaults.FontFile != "" {
+		metrics, err = badge.LoadFontFile(defaults.FontFile, size)
 	} else {
-		fontName := bcfg.Font
+		fontName := defaults.Font
 		if fontName == "" {
 			fontName = "dejavu-sans"
 		}
@@ -104,10 +104,21 @@ func generateAdHocBadge(eng *badge.Engine) error {
 	return nil
 }
 
-func generateConfigBadges(eng *badge.Engine, names []string) error {
-	items := cfg.Badges.Items
+func generateConfigBadges(eng *badge.Engine, defaults config.NarratorBadgeDefaults, names []string) error {
+	// Collect all narrator items that have generation capability
+	var items []config.NarratorItem
+	for _, f := range cfg.Git.Narrator.Files {
+		for _, s := range f.Sections {
+			for _, item := range s.Items {
+				if item.HasGeneration() {
+					items = append(items, item)
+				}
+			}
+		}
+	}
+
 	if len(items) == 0 {
-		return fmt.Errorf("no badge items configured in badges.items")
+		return fmt.Errorf("no badge items with generation configured in git.narrator")
 	}
 
 	// Filter to named items if specified
@@ -116,9 +127,10 @@ func generateConfigBadges(eng *badge.Engine, names []string) error {
 		for _, n := range names {
 			nameSet[n] = true
 		}
-		var filtered []config.BadgeItemConfig
+		var filtered []config.NarratorItem
 		for _, item := range items {
-			if nameSet[item.Name] {
+			// Match by badge name or ID
+			if nameSet[item.Badge] || (item.ID != "" && nameSet[item.ID]) {
 				filtered = append(filtered, item)
 			}
 		}
@@ -158,59 +170,55 @@ func generateConfigBadges(eng *badge.Engine, names []string) error {
 	}
 
 	for _, item := range items {
+		spec := item.ToBadgeSpec()
+
 		// Resolve per-item engine if font is overridden.
 		itemEng := eng
-		if item.Font != "" || item.FontFile != "" || item.FontSize != 0 {
-			override, err := buildItemEngine(item, cfg.Badges)
+		if spec.Font != "" || spec.FontFile != "" || spec.FontSize != 0 {
+			override, err := buildItemEngine(spec, defaults)
 			if err != nil {
-				return fmt.Errorf("loading font for badge %s: %w", item.Name, err)
+				return fmt.Errorf("loading font for badge %s: %w", item.Badge, err)
 			}
 			itemEng = override
 		}
 
 		// Resolve value templates
-		value := item.Value
+		value := spec.Value
 		if versionInfo != nil && value != "" {
 			value = gitver.ResolveTemplateWithDir(value, versionInfo, rootDir)
 		}
 		value = gitver.ResolveDockerTemplates(value, dockerInfo)
 
 		// Resolve color
-		color := item.Color
+		color := spec.Color
 		if color == "" || color == "auto" {
 			color = badge.StatusColor(bgStatus)
 		}
 
-		// Resolve output path
-		output := item.Output
-		if output == "" {
-			output = fmt.Sprintf(".stagefreight/badges/%s.svg", item.Name)
-		}
-
 		svg := itemEng.Generate(badge.Badge{
-			Label: item.Label,
+			Label: spec.Label,
 			Value: value,
 			Color: color,
 		})
 
-		if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
-			return fmt.Errorf("creating badge directory for %s: %w", item.Name, err)
+		if err := os.MkdirAll(filepath.Dir(spec.Output), 0o755); err != nil {
+			return fmt.Errorf("creating badge directory for %s: %w", item.Badge, err)
 		}
-		if err := os.WriteFile(output, []byte(svg), 0o644); err != nil {
-			return fmt.Errorf("writing badge %s: %w", item.Name, err)
+		if err := os.WriteFile(spec.Output, []byte(svg), 0o644); err != nil {
+			return fmt.Errorf("writing badge %s: %w", item.Badge, err)
 		}
-		fmt.Printf("  badge %s → %s\n", item.Name, output)
+		fmt.Printf("  badge %s → %s\n", item.Badge, spec.Output)
 	}
 
 	return nil
 }
 
-// buildItemEngine creates a badge engine for an item with font overrides.
-// Falls back to global config values for any field not overridden.
-func buildItemEngine(item config.BadgeItemConfig, global config.BadgesConfig) (*badge.Engine, error) {
-	size := item.FontSize
+// buildItemEngine creates a badge engine for a BadgeSpec with font overrides.
+// Falls back to narrator badge defaults for any field not overridden.
+func buildItemEngine(spec config.BadgeSpec, defaults config.NarratorBadgeDefaults) (*badge.Engine, error) {
+	size := spec.FontSize
 	if size == 0 {
-		size = global.FontSize
+		size = defaults.FontSize
 	}
 	if size == 0 {
 		size = 11
@@ -220,14 +228,14 @@ func buildItemEngine(item config.BadgeItemConfig, global config.BadgesConfig) (*
 	var err error
 
 	switch {
-	case item.FontFile != "":
-		metrics, err = badge.LoadFontFile(item.FontFile, size)
-	case item.Font != "":
-		metrics, err = badge.LoadBuiltinFont(item.Font, size)
-	case global.FontFile != "":
-		metrics, err = badge.LoadFontFile(global.FontFile, size)
+	case spec.FontFile != "":
+		metrics, err = badge.LoadFontFile(spec.FontFile, size)
+	case spec.Font != "":
+		metrics, err = badge.LoadBuiltinFont(spec.Font, size)
+	case defaults.FontFile != "":
+		metrics, err = badge.LoadFontFile(defaults.FontFile, size)
 	default:
-		fontName := global.Font
+		fontName := defaults.Font
 		if fontName == "" {
 			fontName = "dejavu-sans"
 		}

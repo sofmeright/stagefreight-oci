@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/sofmeright/stagefreight/src/build"
+	"github.com/sofmeright/stagefreight/src/component"
 	"github.com/sofmeright/stagefreight/src/config"
 	"github.com/sofmeright/stagefreight/src/gitver"
 	"github.com/sofmeright/stagefreight/src/narrator"
@@ -36,7 +37,7 @@ func init() {
 }
 
 func runNarratorRun(cmd *cobra.Command, args []string) error {
-	ncfg := cfg.Narrator
+	ncfg := cfg.Git.Narrator
 	if len(ncfg.Files) == 0 {
 		return fmt.Errorf("no narrator files configured in narrator.files")
 	}
@@ -210,6 +211,15 @@ func buildModules(items []config.NarratorItem, linkBase, rawBase string, vi *git
 				text = gitver.ResolveTemplate(text, vi)
 			}
 			modules = append(modules, narrator.TextModule{Text: text})
+
+		case item.Component != "":
+			spec, err := component.ParseSpec(item.Component)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "narrator: component %s: %v\n", item.Component, err)
+				continue
+			}
+			docs := component.GenerateDocs([]*component.SpecFile{spec})
+			modules = append(modules, narrator.ComponentModule{Docs: strings.TrimSpace(docs)})
 		}
 	}
 
@@ -221,8 +231,8 @@ func resolveBadgeItem(item config.NarratorItem, linkBase, rawBase string) narrat
 	var imgURL string
 	if item.URL != "" {
 		imgURL = item.URL
-	} else if item.File != "" && rawBase != "" {
-		imgURL = rawBase + "/" + strings.TrimPrefix(item.File, "./")
+	} else if item.DisplayFile() != "" && rawBase != "" {
+		imgURL = rawBase + "/" + strings.TrimPrefix(item.DisplayFile(), "./")
 	} else {
 		return nil
 	}
