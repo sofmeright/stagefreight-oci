@@ -220,7 +220,7 @@ func selfCheck(path string) {
 
 	// Check 1: No raw C0 control bytes (except newline) or DEL.
 	for i, b := range data {
-		if b == '\n' {
+		if b == '\n' || b == '\t' {
 			continue
 		}
 		if b <= 0x1F || b == 0x7F {
