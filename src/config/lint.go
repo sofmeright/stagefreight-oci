@@ -11,6 +11,7 @@ const (
 // ModuleConfig holds per-module overrides.
 type ModuleConfig struct {
 	Enabled *bool          `yaml:"enabled,omitempty"`
+	Exclude []string       `yaml:"exclude,omitempty"`
 	Options map[string]any `yaml:"options,omitempty"`
 }
 

@@ -146,6 +146,11 @@ func (e *Engine) RunWithStats(ctx context.Context, files []FileInfo) ([]Finding,
 				defer wg.Done()
 				defer sem.Release(1)
 
+				// Per-module file exclusion
+				if e.isModuleExcluded(m.Name(), f.Path) {
+					return
+				}
+
 				// Check cache
 				if e.Cache != nil && e.Cache.Enabled && data != nil {
 					cfgJSON := e.moduleConfigJSON(m.Name())
@@ -300,9 +305,49 @@ func (e *Engine) ModuleNames() []string {
 	return names
 }
 
+// normalizeSlashPath converts a path to forward slashes and strips leading "./".
+func normalizeSlashPath(p string) string {
+	p = filepath.ToSlash(p)
+	p = strings.TrimPrefix(p, "./")
+	return p
+}
+
+// matchExcludePattern matches a single exclude pattern against a normalized path.
+// Patterns containing "/" or "**" match against the full path; others match base name only.
+func matchExcludePattern(pattern, normPath, baseName string) bool {
+	pattern = filepath.ToSlash(pattern)
+	if strings.Contains(pattern, "/") || strings.Contains(pattern, "**") {
+		return matchGlob(pattern, normPath)
+	}
+	return matchGlob(pattern, baseName)
+}
+
 func (e *Engine) isExcluded(path string) bool {
+	if len(e.Config.Exclude) == 0 {
+		return false
+	}
+	normPath := normalizeSlashPath(path)
+	baseName := filepath.Base(normPath)
 	for _, pattern := range e.Config.Exclude {
-		if matchGlob(pattern, path) || matchGlob(pattern, filepath.Base(path)) {
+		if matchExcludePattern(pattern, normPath, baseName) {
+			return true
+		}
+	}
+	return false
+}
+
+// isModuleExcluded checks per-module exclude patterns from config.
+// Engine-wide isExcluded prevents files from being queued at all;
+// module excludes prevent only that module from running on matching files.
+func (e *Engine) isModuleExcluded(moduleName, path string) bool {
+	mc, ok := e.Config.Modules[moduleName]
+	if !ok || len(mc.Exclude) == 0 {
+		return false
+	}
+	normPath := normalizeSlashPath(path)
+	baseName := filepath.Base(normPath)
+	for _, pattern := range mc.Exclude {
+		if matchExcludePattern(pattern, normPath, baseName) {
 			return true
 		}
 	}

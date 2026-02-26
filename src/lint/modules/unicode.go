@@ -3,8 +3,11 @@ package modules
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 
@@ -12,15 +15,107 @@ import (
 )
 
 func init() {
-	lint.Register("unicode", func() lint.Module { return &unicodeModule{} })
+	lint.Register("unicode", func() lint.Module {
+		return &unicodeModule{cfg: defaultUnicodeConfig()}
+	})
 }
 
-type unicodeModule struct{}
+// --------------------------------------------------------------------
+// Configuration
+// --------------------------------------------------------------------
 
-func (m *unicodeModule) Name() string           { return "unicode" }
-func (m *unicodeModule) DefaultEnabled() bool    { return true }
-func (m *unicodeModule) AutoDetect() []string    { return nil }
+// unicodeConfig holds per-category toggles and the ASCII control char allowlist.
+// Parsed from module options via JSON round-trip (same pattern as freshness).
+type unicodeConfig struct {
+	DetectBidi         bool     `json:"detect_bidi"`
+	DetectZeroWidth    bool     `json:"detect_zero_width"`
+	DetectControlASCII bool     `json:"detect_control_ascii"`
+	AllowControlPaths  []string `json:"allow_control_ascii_in_paths"`
+	AllowControlBytes  []int    `json:"allow_control_ascii"`
+}
 
+func defaultUnicodeConfig() unicodeConfig {
+	return unicodeConfig{
+		DetectBidi:         true,
+		DetectZeroWidth:    true,
+		DetectControlASCII: true,
+	}
+}
+
+// --------------------------------------------------------------------
+// Category constants
+// --------------------------------------------------------------------
+
+const (
+	catOther = iota
+	catBidi
+	catZeroWidth
+	catControlASCII
+)
+
+// runeCategory mirrors the same rune ranges as checkRune / severityForRune.
+func runeCategory(r rune) int {
+	switch r {
+	case '\u202A', '\u202B', '\u202C', '\u202D', '\u202E',
+		'\u2066', '\u2067', '\u2068', '\u2069':
+		return catBidi
+	case '\u200B', '\u200C', '\u200D', '\uFEFF':
+		return catZeroWidth
+	}
+	if r < 0x80 && unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r' {
+		return catControlASCII
+	}
+	return catOther
+}
+
+// --------------------------------------------------------------------
+// Module
+// --------------------------------------------------------------------
+
+type unicodeModule struct {
+	cfg            unicodeConfig
+	allowedControl map[byte]bool // built from AllowControlBytes during Configure
+}
+
+func (m *unicodeModule) Name() string        { return "unicode" }
+func (m *unicodeModule) DefaultEnabled() bool { return true }
+func (m *unicodeModule) AutoDetect() []string { return nil }
+
+// Configure implements lint.ConfigurableModule.
+func (m *unicodeModule) Configure(opts map[string]any) error {
+	cfg := defaultUnicodeConfig()
+	if len(opts) != 0 {
+		b, err := json.Marshal(opts)
+		if err != nil {
+			return fmt.Errorf("unicode: marshal options: %w", err)
+		}
+		if err := json.Unmarshal(b, &cfg); err != nil {
+			return fmt.Errorf("unicode: unmarshal options: %w", err)
+		}
+	}
+
+	allowed := make(map[byte]bool)
+	for _, v := range cfg.AllowControlBytes {
+		if v < 0 || v > 31 {
+			return fmt.Errorf("unicode: allow_control_ascii contains %d (must be 0..31)", v)
+		}
+		if v == 9 || v == 10 || v == 13 {
+			return fmt.Errorf("unicode: allow_control_ascii contains %d (tab/newline/carriage return are always allowed; do not list them)", v)
+		}
+		allowed[byte(v)] = true // de-dupe via map
+	}
+
+	// Normalize allowlist patterns to forward slashes once.
+	for i := range cfg.AllowControlPaths {
+		cfg.AllowControlPaths[i] = normalizeSlashPath(cfg.AllowControlPaths[i])
+	}
+
+	m.cfg = cfg
+	m.allowedControl = allowed
+	return nil
+}
+
+// Check scans a file for invisible, confusable, and dangerous Unicode characters.
 func (m *unicodeModule) Check(ctx context.Context, file lint.FileInfo) ([]lint.Finding, error) {
 	f, err := os.Open(file.AbsPath)
 	if err != nil {
@@ -52,16 +147,46 @@ func (m *unicodeModule) Check(ctx context.Context, file lint.FileInfo) ([]lint.F
 			r, size := utf8.DecodeRune(line[i:])
 			col++
 
-			if msg := checkRune(r); msg != "" {
-				findings = append(findings, lint.Finding{
-					File:     file.Path,
-					Line:     lineNum,
-					Column:   col,
-					Module:   m.Name(),
-					Severity: severityForRune(r),
-					Message:  fmt.Sprintf("%s (U+%04X)", msg, r),
-				})
+			msg := checkRune(r)
+			if msg == "" {
+				i += size
+				continue
 			}
+
+			// Category-aware gating — only intercepts the three
+			// configurable categories; everything else (confusables,
+			// tag chars, etc.) always fires.
+			cat := runeCategory(r)
+			switch cat {
+			case catBidi:
+				if !m.cfg.DetectBidi {
+					i += size
+					continue
+				}
+			case catZeroWidth:
+				if !m.cfg.DetectZeroWidth {
+					i += size
+					continue
+				}
+			case catControlASCII:
+				if !m.cfg.DetectControlASCII {
+					i += size
+					continue
+				}
+				if m.isAllowedControl(file.Path, r) {
+					i += size
+					continue
+				}
+			}
+
+			findings = append(findings, lint.Finding{
+				File:     file.Path,
+				Line:     lineNum,
+				Column:   col,
+				Module:   m.Name(),
+				Severity: severityForRune(r),
+				Message:  fmt.Sprintf("%s (U+%04X)", msg, r),
+			})
 
 			i += size
 		}
@@ -69,6 +194,35 @@ func (m *unicodeModule) Check(ctx context.Context, file lint.FileInfo) ([]lint.F
 
 	return findings, scanner.Err()
 }
+
+// isAllowedControl checks whether a specific ASCII control byte is explicitly
+// allowed in a given file path via the module configuration.
+func (m *unicodeModule) isAllowedControl(path string, r rune) bool {
+	if r < 0 || r >= 0x80 {
+		return false
+	}
+	if !m.allowedControl[byte(r)] {
+		return false
+	}
+	normPath := normalizeSlashPath(path)
+	for _, pat := range m.cfg.AllowControlPaths {
+		if lint.MatchGlob(pat, normPath) {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeSlashPath converts a path to forward slashes and strips leading "./".
+func normalizeSlashPath(p string) string {
+	p = filepath.ToSlash(p)
+	p = strings.TrimPrefix(p, "./")
+	return p
+}
+
+// --------------------------------------------------------------------
+// Rune classification (unchanged)
+// --------------------------------------------------------------------
 
 func checkRune(r rune) string {
 	// Bidi override characters — can change text rendering direction for attacks

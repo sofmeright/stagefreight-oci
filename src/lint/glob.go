@@ -5,6 +5,11 @@ import (
 	"strings"
 )
 
+// MatchGlob matches a glob pattern supporting ** against a forward-slash path.
+// Patterns and paths should use "/" separators.
+// Exported wrapper so modules can reuse the engine's glob semantics.
+func MatchGlob(pattern, path string) bool { return matchGlob(pattern, path) }
+
 // matchGlob extends filepath.Match with support for "**" (zero or more path
 // segments). Patterns without "**" delegate directly to filepath.Match.
 func matchGlob(pattern, path string) bool {
