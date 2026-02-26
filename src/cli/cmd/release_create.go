@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/sofmeright/stagefreight/src/build"
 	"github.com/sofmeright/stagefreight/src/config"
 	"github.com/sofmeright/stagefreight/src/forge"
 	"github.com/sofmeright/stagefreight/src/gitver"
+	"github.com/sofmeright/stagefreight/src/output"
 	"github.com/sofmeright/stagefreight/src/release"
 	"github.com/sofmeright/stagefreight/src/retention"
 )
@@ -55,6 +57,21 @@ func init() {
 	releaseCmd.AddCommand(releaseCreateCmd)
 }
 
+// actionResult tracks the outcome of a single release action.
+type actionResult struct {
+	Name string
+	OK   bool
+	Err  error
+}
+
+// releaseReport collects all release action outcomes for rendering.
+type releaseReport struct {
+	Tag, Forge, URL string
+	Assets          []actionResult
+	Links           []actionResult
+	Tags            []actionResult
+}
+
 func runReleaseCreate(cmd *cobra.Command, args []string) error {
 	rootDir, err := os.Getwd()
 	if err != nil {
@@ -62,6 +79,8 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := context.Background()
+	color := output.UseColor()
+	w := os.Stdout
 
 	// Detect version for tag
 	versionInfo, err := build.DetectVersion(rootDir)
@@ -86,7 +105,7 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			// Not fatal — security scan may have been skipped
 			if verbose {
-				fmt.Fprintf(os.Stderr, "  note: no security summary at %s: %v\n", summaryPath, err)
+				fmt.Fprintf(os.Stderr, "note: no security summary at %s: %v\n", summaryPath, err)
 			}
 		} else {
 			secSummary = string(data)
@@ -125,26 +144,29 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("  creating release %s on %s...\n", tag, provider)
+	// ── Collect all results ──
+	start := time.Now()
+	report := releaseReport{
+		Tag:   tag,
+		Forge: string(provider),
+	}
 
 	// Create release
-	rel, err := forgeClient.CreateRelease(ctx, forge.ReleaseOptions{
+	rel, createErr := forgeClient.CreateRelease(ctx, forge.ReleaseOptions{
 		TagName:     tag,
 		Name:        name,
 		Description: notes,
 		Draft:       rcDraft,
 		Prerelease:  rcPrerelease,
 	})
-	if err != nil {
-		return fmt.Errorf("creating release: %w", err)
+	if createErr != nil {
+		return fmt.Errorf("creating release: %w", createErr)
 	}
-
-	fmt.Printf("  release %s → %s\n", colorGreen("✓"), rel.URL)
+	report.URL = rel.URL
 
 	// Upload assets
 	for _, assetPath := range rcAssets {
 		assetName := assetPath
-		// Use basename for display name
 		for i := len(assetPath) - 1; i >= 0; i-- {
 			if assetPath[i] == '/' {
 				assetName = assetPath[i+1:]
@@ -156,32 +178,34 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 			Name:     assetName,
 			FilePath: assetPath,
 		}); err != nil {
-			fmt.Fprintf(os.Stderr, "  warning: failed to upload %s: %v\n", assetPath, err)
-			continue
+			report.Assets = append(report.Assets, actionResult{Name: assetName, Err: err})
+			fmt.Fprintf(os.Stderr, "warning: failed to upload %s: %v\n", assetPath, err)
+		} else {
+			report.Assets = append(report.Assets, actionResult{Name: assetName, OK: true})
 		}
-		fmt.Printf("  → uploaded %s\n", assetName)
 	}
 
 	// Add registry image links (deduplicate by URL)
 	if rcRegistryLinks && len(cfg.Docker.Registries) > 0 {
 		linkedURLs := make(map[string]bool)
 		for _, reg := range cfg.Docker.Registries {
-			provider := reg.Provider
-			if provider == "" {
-				provider = build.DetectProvider(reg.URL)
+			regProvider := reg.Provider
+			if regProvider == "" {
+				regProvider = build.DetectProvider(reg.URL)
 			}
 
-			link := buildRegistryLink(reg, tag, provider)
+			link := buildRegistryLink(reg, tag, regProvider)
 			if linkedURLs[link.URL] {
 				continue
 			}
 			linkedURLs[link.URL] = true
 
 			if err := forgeClient.AddReleaseLink(ctx, rel.ID, link); err != nil {
-				fmt.Fprintf(os.Stderr, "  warning: failed to add registry link for %s: %v\n", reg.URL, err)
-				continue
+				report.Links = append(report.Links, actionResult{Name: link.Name, Err: err})
+				fmt.Fprintf(os.Stderr, "warning: failed to add registry link for %s: %v\n", reg.URL, err)
+			} else {
+				report.Links = append(report.Links, actionResult{Name: link.Name, OK: true})
 			}
-			fmt.Printf("  → linked %s\n", link.Name)
 		}
 	}
 
@@ -190,9 +214,10 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 		catalogLink := buildCatalogLink(remoteURL, tag)
 		if catalogLink.URL != "" {
 			if err := forgeClient.AddReleaseLink(ctx, rel.ID, catalogLink); err != nil {
-				fmt.Fprintf(os.Stderr, "  warning: failed to add catalog link: %v\n", err)
+				report.Links = append(report.Links, actionResult{Name: catalogLink.Name, Err: err})
+				fmt.Fprintf(os.Stderr, "warning: failed to add catalog link: %v\n", err)
 			} else {
-				fmt.Printf("  → linked %s\n", catalogLink.Name)
+				report.Links = append(report.Links, actionResult{Name: catalogLink.Name, OK: true})
 			}
 		}
 	}
@@ -200,12 +225,11 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 	// Auto-tagging: create rolling releases for configured tag templates
 	if len(cfg.Release.Tags) > 0 {
 		currentTag := os.Getenv("CI_COMMIT_TAG")
-		// Check if the current tag matches git_tags filter
 		if config.MatchPatternsWithPolicy(cfg.Release.GitTags, currentTag, cfg.Git.Policy.Tags) || currentTag == "" {
 			rollingTags := gitver.ResolveTags(cfg.Release.Tags, versionInfo)
 			for _, rt := range rollingTags {
 				if rt == tag || rt == "" {
-					continue // skip the primary release tag
+					continue
 				}
 				_, err := forgeClient.CreateRelease(ctx, forge.ReleaseOptions{
 					TagName:     rt,
@@ -223,30 +247,67 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 						Prerelease:  rcPrerelease,
 					})
 					if err != nil {
-						fmt.Fprintf(os.Stderr, "  warning: rolling tag %s: %v\n", rt, err)
+						report.Tags = append(report.Tags, actionResult{Name: rt, Err: err})
+						fmt.Fprintf(os.Stderr, "warning: rolling tag %s: %v\n", rt, err)
 						continue
 					}
 				}
-				fmt.Printf("  → rolling tag %s\n", rt)
+				report.Tags = append(report.Tags, actionResult{Name: rt, OK: true})
 			}
 		}
 	}
 
-	// Sync to other forges
+	elapsed := time.Since(start)
+
+	// ── Release section ──
+	overallStatus := "created"
+	overallIcon := "success"
+	if hasActionFailures(report.Assets) || hasActionFailures(report.Links) || hasActionFailures(report.Tags) {
+		overallStatus = "partial"
+		overallIcon = "skipped" // yellow icon
+	}
+
+	output.SectionStart(w, "sf_release", "Release")
+	sec := output.NewSection(w, "Release", elapsed, color)
+	sec.Row("%s  →  %s   %s  %s", tag, provider, output.StatusIcon(overallIcon, color), overallStatus)
+	sec.Row("%s", report.URL)
+
+	if len(report.Assets) > 0 || len(report.Links) > 0 || len(report.Tags) > 0 {
+		sec.Row("")
+		if len(report.Assets) > 0 {
+			renderCheckpoint(sec, color, "assets", report.Assets)
+		}
+		if len(report.Links) > 0 {
+			renderCheckpoint(sec, color, "links", report.Links)
+		}
+		if len(report.Tags) > 0 {
+			renderCheckpoint(sec, color, "tags", report.Tags)
+		}
+	}
+
+	sec.Close()
+	output.SectionEnd(w, "sf_release")
+
+	// ── Sync section ──
 	if !rcSkipSync && len(cfg.Release.Sync) > 0 {
 		currentTag := os.Getenv("CI_COMMIT_TAG")
 		currentBranch := resolveBranchFromEnv()
+
+		var syncResults []actionResult
+		syncStart := time.Now()
+
 		for _, target := range cfg.Release.Sync {
 			if !syncAllowed(target, currentTag, currentBranch, cfg.Git.Policy) {
 				if verbose {
-					fmt.Fprintf(os.Stderr, "  skip sync: %s (tag=%q branch=%q not allowed)\n", target.Name, currentTag, currentBranch)
+					fmt.Fprintf(os.Stderr, "skip sync: %s (tag=%q branch=%q not allowed)\n", target.Name, currentTag, currentBranch)
 				}
 				continue
 			}
 
 			syncClient, err := newSyncForgeClient(target)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "  warning: sync to %s: %v\n", target.Name, err)
+				syncResults = append(syncResults, actionResult{Name: target.Name, Err: err})
+				fmt.Fprintf(os.Stderr, "warning: sync to %s: %v\n", target.Name, err)
 				continue
 			}
 
@@ -259,10 +320,12 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 					Prerelease:  rcPrerelease,
 				})
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "  warning: sync release to %s: %v\n", target.Name, err)
-				} else {
-					fmt.Printf("  → synced release to %s: %s\n", target.Name, syncRel.URL)
+					syncResults = append(syncResults, actionResult{Name: target.Name, Err: err})
+					fmt.Fprintf(os.Stderr, "warning: sync release to %s: %v\n", target.Name, err)
+					continue
 				}
+
+				syncResults = append(syncResults, actionResult{Name: fmt.Sprintf("%s: %s", target.Name, syncRel.URL), OK: true})
 
 				// Sync assets to this target
 				if target.SyncAssets {
@@ -278,34 +341,105 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 							Name:     assetName,
 							FilePath: assetPath,
 						}); err != nil {
-							fmt.Fprintf(os.Stderr, "  warning: sync asset %s to %s: %v\n", assetName, target.Name, err)
+							fmt.Fprintf(os.Stderr, "warning: sync asset %s to %s: %v\n", assetName, target.Name, err)
 						}
 					}
 				}
 			}
 		}
+
+		if len(syncResults) > 0 {
+			syncElapsed := time.Since(syncStart)
+			output.SectionStart(w, "sf_sync", "Sync")
+			syncSec := output.NewSection(w, "Sync", syncElapsed, color)
+			for _, r := range syncResults {
+				if r.OK {
+					syncSec.Row("%s %s", output.StatusIcon("success", color), r.Name)
+				} else {
+					msg := "unknown error"
+					if r.Err != nil {
+						msg = r.Err.Error()
+					}
+					syncSec.Row("%s %s: %s", output.StatusIcon("failed", color), r.Name, msg)
+				}
+			}
+			syncSec.Close()
+			output.SectionEnd(w, "sf_sync")
+		}
 	}
 
-	// Auto-prune: apply retention policy after successful release
+	// ── Retention section ──
 	if cfg.Release.Retention.Active() {
+		retStart := time.Now()
 		var patterns []string
 		if len(cfg.Release.Tags) > 0 {
 			patterns = retention.TemplatesToPatterns(cfg.Release.Tags)
 		}
 		store := &forgeStore{forge: forgeClient}
 		result, retErr := retention.Apply(ctx, store, patterns, cfg.Release.Retention)
+
+		retElapsed := time.Since(retStart)
+
+		output.SectionStart(w, "sf_retention", "Retention")
+		retSec := output.NewSection(w, "Retention", retElapsed, color)
+
 		if retErr != nil {
-			fmt.Fprintf(os.Stderr, "  warning: release retention: %v\n", retErr)
-		} else if len(result.Deleted) > 0 {
-			fmt.Printf("  retention: matched=%d kept=%d deleted=%d\n",
-				result.Matched, result.Kept, len(result.Deleted))
+			retSec.Row("error: %v", retErr)
+			fmt.Fprintf(os.Stderr, "warning: release retention: %v\n", retErr)
+		} else {
+			retSec.Row("%-16s%d", "matched", result.Matched)
+			retSec.Row("%-16s%d", "kept", result.Kept)
+			retSec.Row("%-16s%d", "pruned", len(result.Deleted))
 			for _, d := range result.Deleted {
-				fmt.Printf("    - %s\n", d)
+				retSec.Row("  - %s", d)
 			}
 		}
+
+		retSec.Close()
+		output.SectionEnd(w, "sf_retention")
 	}
 
 	return nil
+}
+
+// renderCheckpoint renders a checkpoint line with pass/fail count, expanding failures.
+func renderCheckpoint(sec *output.Section, color bool, label string, results []actionResult) {
+	total := len(results)
+	ok := 0
+	var failed []actionResult
+	for _, r := range results {
+		if r.OK {
+			ok++
+		} else {
+			failed = append(failed, r)
+		}
+	}
+
+	status := "success"
+	if ok != total {
+		status = "failed"
+	}
+	icon := output.StatusIcon(status, color)
+
+	sec.Row("%s %-7s %d/%d", icon, label+":", ok, total)
+
+	for _, r := range failed {
+		msg := "unknown error"
+		if r.Err != nil {
+			msg = r.Err.Error()
+		}
+		sec.Row("  - %s: %s", r.Name, msg)
+	}
+}
+
+// hasActionFailures returns true if any result has a failure.
+func hasActionFailures(results []actionResult) bool {
+	for _, r := range results {
+		if !r.OK {
+			return true
+		}
+	}
+	return false
 }
 
 // buildRegistryLink creates a forge release link for a registry image.

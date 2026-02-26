@@ -31,6 +31,13 @@ func init() {
 	dockerCmd.AddCommand(dockerReadmeCmd)
 }
 
+// readmeSyncResult tracks the outcome of syncing to a single registry.
+type readmeSyncResult struct {
+	Registry string
+	Status   string // "success" | "skipped" | "failed"
+	Err      error
+}
+
 func runDockerReadme(cmd *cobra.Command, args []string) error {
 	rootDir, err := os.Getwd()
 	if err != nil {
@@ -45,6 +52,7 @@ func runDockerReadme(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := context.Background()
+	color := output.UseColor()
 	w := os.Stdout
 
 	content, err := registry.PrepareReadme(cfg.Docker.Readme, rootDir)
@@ -58,17 +66,93 @@ func runDockerReadme(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	synced, skipped, errs := syncReadmeToRegistries(ctx, w, cfg.Docker.Readme, cfg.Docker.Registries, content)
+	start := time.Now()
+	results := syncReadmeCollect(ctx, cfg.Docker.Readme, cfg.Docker.Registries, content)
+	elapsed := time.Since(start)
 
-	fmt.Fprintf(w, "\nreadme: synced=%d skipped=%d errors=%d\n", synced, skipped, errs)
-	if errs > 0 {
-		return fmt.Errorf("readme sync had %d error(s)", errs)
+	// Tally
+	var synced, skipped, errors int
+	for _, r := range results {
+		switch r.Status {
+		case "success":
+			synced++
+		case "skipped":
+			skipped++
+		case "failed":
+			errors++
+		}
+	}
+
+	// ── README Sync section ──
+	output.SectionStart(w, "sf_readme", "README Sync")
+	sec := output.NewSection(w, "README Sync", elapsed, color)
+
+	for _, r := range results {
+		output.RowStatus(sec, r.Registry, "", r.Status, color)
+	}
+
+	sec.Separator()
+	sec.Row("%d synced, %d skipped, %d errors", synced, skipped, errors)
+
+	sec.Close()
+	output.SectionEnd(w, "sf_readme")
+
+	if errors > 0 {
+		return fmt.Errorf("readme sync had %d error(s)", errors)
 	}
 	return nil
 }
 
+// syncReadmeCollect pushes README content to all supported registries,
+// returning results for each. Used by standalone `docker readme` command.
+func syncReadmeCollect(ctx context.Context, readmeCfg config.DockerReadmeConfig, registries []config.RegistryConfig, content *registry.ReadmeContent) []readmeSyncResult {
+	var results []readmeSyncResult
+
+	for _, reg := range registries {
+		provider := reg.Provider
+		if provider == "" {
+			provider = "generic"
+		}
+
+		name := reg.URL + "/" + reg.Path
+
+		// Only dockerhub, quay, harbor support description APIs
+		switch provider {
+		case "dockerhub", "quay", "harbor":
+			// supported
+		default:
+			results = append(results, readmeSyncResult{Registry: name, Status: "skipped"})
+			continue
+		}
+
+		client, err := registry.NewRegistry(provider, reg.URL, reg.Credentials)
+		if err != nil {
+			results = append(results, readmeSyncResult{Registry: name, Status: "failed", Err: err})
+			fmt.Fprintf(os.Stderr, "readme: error %s: %v\n", name, err)
+			continue
+		}
+
+		// Per-registry description override
+		short := content.Short
+		if reg.Description != "" {
+			short = reg.Description
+		}
+
+		if err := client.UpdateDescription(ctx, reg.Path, short, content.Full); err != nil {
+			results = append(results, readmeSyncResult{Registry: name, Status: "failed", Err: err})
+			fmt.Fprintf(os.Stderr, "readme: error %s: %v\n", name, err)
+			continue
+		}
+
+		results = append(results, readmeSyncResult{Registry: name, Status: "success"})
+	}
+
+	return results
+}
+
 // syncReadmeToRegistries pushes README content to all supported registries.
 // Returns counts of synced, skipped, and errored registries.
+// Used by the docker build pipeline — left untouched for pipeline compatibility.
 func syncReadmeToRegistries(ctx context.Context, w io.Writer, readmeCfg config.DockerReadmeConfig, registries []config.RegistryConfig, content *registry.ReadmeContent) (synced, skipped, errors int) {
 	for _, reg := range registries {
 		provider := reg.Provider

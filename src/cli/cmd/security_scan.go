@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/sofmeright/stagefreight/src/output"
 	"github.com/sofmeright/stagefreight/src/security"
 )
 
@@ -72,49 +74,75 @@ func runSecurityScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating output dir: %w", err)
 	}
 
+	color := output.UseColor()
+	w := os.Stdout
+
 	ctx := context.Background()
+	start := time.Now()
 	result, err := security.Scan(ctx, scanCfg)
+	elapsed := time.Since(start)
+
 	if err != nil {
 		return fmt.Errorf("security scan: %w", err)
 	}
 
-	// Report
-	switch result.Status {
-	case "passed":
-		fmt.Printf("  security %s (no critical or high vulnerabilities)\n", colorGreen("✓"))
-	case "warning":
-		fmt.Printf("  security %s (%d high vulnerabilities)\n", colorYellow("⚠"), result.High)
-	case "critical":
-		fmt.Printf("  security %s (%d critical vulnerabilities)\n", colorRed("✗"), result.Critical)
-	case "skipped":
-		fmt.Println("  security scan skipped")
-		return nil
-	}
-
-	// Print artifact paths
-	for _, a := range result.Artifacts {
-		fmt.Printf("  → %s\n", a)
-	}
+	// Collect artifacts
+	artifacts := append([]string{}, result.Artifacts...)
 
 	// Resolve detail level from rules (CLI override > tag/branch rules > default)
 	detail := security.ResolveDetailLevel(cfg.Security, secScanDetail, cfg.Git.Policy)
 
 	// Build and write summary
 	summary := security.BuildSummary(result, detail)
+	var summaryPath string
 	if summary != "" {
-		// Write summary to file for downstream consumption by release notes
-		summaryPath := scanCfg.OutputDir + "/summary.md"
-		if err := os.WriteFile(summaryPath, []byte(summary), 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "  warning: could not write summary: %v\n", err)
+		summaryPath = scanCfg.OutputDir + "/summary.md"
+		if wErr := os.WriteFile(summaryPath, []byte(summary), 0o644); wErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write summary: %v\n", wErr)
+			summaryPath = ""
 		} else {
-			fmt.Printf("  → %s (detail: %s)\n", summaryPath, detail)
+			artifacts = append(artifacts, fmt.Sprintf("%s (detail: %s)", summaryPath, detail))
 		}
+	}
 
-		// Print to stdout if verbose
-		if verbose {
-			fmt.Println()
-			fmt.Print(summary)
+	// Determine status
+	var status, statusDetail string
+	switch result.Status {
+	case "passed":
+		status = "success"
+		statusDetail = "passed"
+	case "warning":
+		status = "skipped" // yellow icon
+		statusDetail = fmt.Sprintf("%d high vulnerabilities", result.High)
+	case "critical":
+		status = "failed"
+		statusDetail = fmt.Sprintf("%d critical vulnerabilities", result.Critical)
+	default:
+		status = "success"
+		statusDetail = result.Status
+	}
+
+	// ── Security Scan section ──
+	output.SectionStart(w, "sf_security", "Security Scan")
+	sec := output.NewSection(w, "Security Scan", elapsed, color)
+	sec.Row("%-16s%s", "image", imageRef)
+	sec.Row("%-16s%s %s", "status", statusDetail, output.StatusIcon(status, color))
+
+	if len(artifacts) > 0 {
+		sec.Row("")
+		sec.Row("artifacts")
+		for _, a := range artifacts {
+			sec.Row("  → %s", a)
 		}
+	}
+
+	sec.Close()
+	output.SectionEnd(w, "sf_security")
+
+	// Print verbose summary to stdout
+	if verbose && summary != "" {
+		fmt.Println()
+		fmt.Print(summary)
 	}
 
 	// Fail if configured and critical vulns found
@@ -123,8 +151,4 @@ func runSecurityScan(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-func colorYellow(s string) string {
-	return "\033[33m" + s + "\033[0m"
 }

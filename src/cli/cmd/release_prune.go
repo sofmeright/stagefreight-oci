@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/sofmeright/stagefreight/src/config"
 	"github.com/sofmeright/stagefreight/src/forge"
+	"github.com/sofmeright/stagefreight/src/output"
 	"github.com/sofmeright/stagefreight/src/retention"
 )
 
@@ -43,6 +45,8 @@ func runReleasePrune(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := context.Background()
+	color := output.UseColor()
+	w := os.Stdout
 
 	// Detect forge
 	remoteURL, err := detectRemoteURL(rootDir)
@@ -67,29 +71,40 @@ func runReleasePrune(cmd *cobra.Command, args []string) error {
 	}
 
 	if rpDryRun {
-		return runReleasePruneDryRun(ctx, forgeClient, patterns)
+		return runReleasePruneDryRun(ctx, w, color, forgeClient, patterns)
 	}
 
+	start := time.Now()
 	store := &forgeStore{forge: forgeClient}
 	result, err := retention.Apply(ctx, store, patterns, cfg.Release.Retention)
+	elapsed := time.Since(start)
+
 	if err != nil {
 		return fmt.Errorf("retention: %w", err)
 	}
 
-	fmt.Printf("  release retention: matched=%d kept=%d deleted=%d\n",
-		result.Matched, result.Kept, len(result.Deleted))
+	// ── Retention section ──
+	output.SectionStart(w, "sf_retention", "Retention")
+	sec := output.NewSection(w, "Retention", elapsed, color)
+
+	sec.Row("%-16s%d", "matched", result.Matched)
+	sec.Row("%-16s%d", "kept", result.Kept)
+	sec.Row("%-16s%d", "pruned", len(result.Deleted))
 
 	for _, d := range result.Deleted {
-		fmt.Printf("    - %s\n", d)
+		sec.Row("  - %s", d)
 	}
 	for _, e := range result.Errors {
-		fmt.Fprintf(os.Stderr, "    error: %v\n", e)
+		fmt.Fprintf(os.Stderr, "error: %v\n", e)
 	}
+
+	sec.Close()
+	output.SectionEnd(w, "sf_retention")
 
 	return nil
 }
 
-func runReleasePruneDryRun(ctx context.Context, f forge.Forge, patterns []string) error {
+func runReleasePruneDryRun(ctx context.Context, w *os.File, color bool, f forge.Forge, patterns []string) error {
 	store := &forgeStore{forge: f}
 	items, err := store.List(ctx)
 	if err != nil {
@@ -105,7 +120,7 @@ func runReleasePruneDryRun(ctx context.Context, f forge.Forge, patterns []string
 	}
 
 	if len(candidates) == 0 {
-		fmt.Println("  no releases match the configured tag patterns")
+		fmt.Fprintln(w, "  no releases match the configured tag patterns")
 		return nil
 	}
 
@@ -116,20 +131,28 @@ func runReleasePruneDryRun(ctx context.Context, f forge.Forge, patterns []string
 	keepSet := retention.ApplyPolicies(candidates, cfg.Release.Retention)
 
 	var keepCount, pruneCount int
+
+	// ── Retention (dry run) section ──
+	output.SectionStart(w, "sf_retention", "Retention")
+	sec := output.NewSection(w, "Retention (dry run)", 0, color)
+
 	for i, item := range candidates {
 		if keepSet[i] {
 			keepCount++
 			if verbose {
-				fmt.Printf("    keep  %s\n", item.Name)
+				sec.Row("  keep  %s", item.Name)
 			}
 		} else {
 			pruneCount++
-			fmt.Printf("    prune %s\n", item.Name)
+			sec.Row("  prune %s", item.Name)
 		}
 	}
 
-	fmt.Printf("  dry run: matched=%d keep=%d prune=%d\n",
-		len(candidates), keepCount, pruneCount)
+	sec.Separator()
+	sec.Row("matched=%d keep=%d prune=%d", len(candidates), keepCount, pruneCount)
+
+	sec.Close()
+	output.SectionEnd(w, "sf_retention")
 
 	return nil
 }

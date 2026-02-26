@@ -93,12 +93,25 @@ func (p *Printer) Print(findings []lint.Finding) bool {
 
 // Summary prints a final summary line.
 func (p *Printer) Summary(total, critical, warning, info int, filesScanned int) {
+	fmt.Fprintf(p.Writer, "\n%s\n", FindingsSummaryLine(total, critical, warning, info, filesScanned, p.Color))
+}
+
+// FindingsSummaryLine returns a one-line findings summary, optionally colored.
+func FindingsSummaryLine(total, critical, warning, info, filesScanned int, color bool) string {
 	parts := []string{}
 	if critical > 0 {
-		parts = append(parts, p.colorize(fmt.Sprintf("%d critical", critical), colorRed))
+		s := fmt.Sprintf("%d critical", critical)
+		if color {
+			s = colorRed + s + colorReset
+		}
+		parts = append(parts, s)
 	}
 	if warning > 0 {
-		parts = append(parts, p.colorize(fmt.Sprintf("%d warning", warning), colorYellow))
+		s := fmt.Sprintf("%d warning", warning)
+		if color {
+			s = colorYellow + s + colorReset
+		}
+		parts = append(parts, s)
 	}
 	if info > 0 {
 		parts = append(parts, fmt.Sprintf("%d info", info))
@@ -109,21 +122,35 @@ func (p *Printer) Summary(total, critical, warning, info int, filesScanned int) 
 		summary = strings.Join(parts, ", ")
 	}
 
-	fmt.Fprintf(p.Writer, "\n%s findings in %d files: %s\n",
-		p.colorize(fmt.Sprintf("%d", total), colorBold),
-		filesScanned,
-		summary,
-	)
+	totalStr := fmt.Sprintf("%d", total)
+	if color {
+		totalStr = colorBold + totalStr + colorReset
+	}
+	return fmt.Sprintf("%s findings in %d files: %s", totalStr, filesScanned, summary)
 }
 
 func (p *Printer) severityStr(s lint.Severity) string {
+	return severityTag(s, p.Color)
+}
+
+// severityTag returns a short severity label, optionally colored.
+func severityTag(s lint.Severity, color bool) string {
 	switch s {
 	case lint.SeverityCritical:
-		return p.colorize("CRIT", colorRed)
+		if color {
+			return colorRed + "CRIT" + colorReset
+		}
+		return "CRIT"
 	case lint.SeverityWarning:
-		return p.colorize("WARN", colorYellow)
+		if color {
+			return colorYellow + "WARN" + colorReset
+		}
+		return "WARN"
 	case lint.SeverityInfo:
-		return p.colorize("INFO", colorGray)
+		if color {
+			return colorGray + "INFO" + colorReset
+		}
+		return "INFO"
 	default:
 		return s.String()
 	}
@@ -164,4 +191,62 @@ func LintTable(w io.Writer, stats []lint.ModuleStats, _ bool) {
 	for _, s := range stats {
 		fmt.Fprintf(w, "    │ %-16s%5d   %5d   %5d\n", s.Name, s.Files, s.Cached, s.Findings)
 	}
+}
+
+// SectionFindings renders findings grouped by file inside a section.
+// Files are sorted lexicographically; findings within each file by line, col, module, message.
+func SectionFindings(sec *Section, findings []lint.Finding, color bool) {
+	if len(findings) == 0 {
+		return
+	}
+
+	byFile := map[string][]lint.Finding{}
+	for _, f := range findings {
+		byFile[f.File] = append(byFile[f.File], f)
+	}
+
+	files := make([]string, 0, len(byFile))
+	for file := range byFile {
+		files = append(files, file)
+	}
+	sort.Strings(files)
+
+	sec.Row("")
+
+	for _, file := range files {
+		ff := byFile[file]
+		sort.Slice(ff, func(i, j int) bool {
+			a, b := ff[i], ff[j]
+			if a.Line != b.Line {
+				return a.Line < b.Line
+			}
+			if a.Column != b.Column {
+				return a.Column < b.Column
+			}
+			if a.Module != b.Module {
+				return a.Module < b.Module
+			}
+			return a.Message < b.Message
+		})
+
+		if color {
+			sec.Row(colorBold + file + colorReset)
+		} else {
+			sec.Row(file)
+		}
+
+		for _, f := range ff {
+			loc := fmt.Sprintf("%d:%d", f.Line, f.Column)
+			sev := severityTag(f.Severity, color)
+			sec.Row("  %-8s %-4s  %-10s %s", loc, sev, f.Module, f.Message)
+		}
+
+		sec.Row("")
+	}
+}
+
+// RowStatus writes a row with label, detail, and a status icon.
+func RowStatus(sec *Section, label, detail, status string, color bool) {
+	icon := StatusIcon(status, color)
+	sec.Row("%-16s%-38s %s", label, detail, icon)
 }

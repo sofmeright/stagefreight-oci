@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/sofmeright/stagefreight/src/lint"
@@ -114,16 +116,38 @@ func runLint(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := context.Background()
-	findings, runErr := engine.Run(ctx, files)
+	ci := output.IsCI()
+	color := output.UseColor()
+	w := os.Stdout
+
+	start := time.Now()
+	findings, modStats, runErr := engine.RunWithStats(ctx, files)
 
 	// Cross-file checks (filename collisions)
 	findings = append(findings, modules.CheckFilenameCollisions(files)...)
+	elapsed := time.Since(start)
 
-	printer := output.NewPrinter()
-	hasCritical := printer.Print(findings)
+	// Global sort for stable output
+	sort.Slice(findings, func(i, j int) bool {
+		a, b := findings[i], findings[j]
+		if a.File != b.File {
+			return a.File < b.File
+		}
+		if a.Line != b.Line {
+			return a.Line < b.Line
+		}
+		if a.Column != b.Column {
+			return a.Column < b.Column
+		}
+		if a.Module != b.Module {
+			return a.Module < b.Module
+		}
+		return a.Message < b.Message
+	})
 
 	// Tally
 	var critical, warning, info int
+	var totalFiles, totalCached int
 	for _, f := range findings {
 		switch f.Severity {
 		case lint.SeverityCritical:
@@ -134,7 +158,39 @@ func runLint(cmd *cobra.Command, args []string) error {
 			info++
 		}
 	}
-	printer.Summary(len(findings), critical, warning, info, len(files))
+	for _, ms := range modStats {
+		totalFiles += ms.Files
+		totalCached += ms.Cached
+	}
+
+	// Write JUnit XML in CI for GitLab test reporting
+	if ci {
+		moduleNames := engine.ModuleNames()
+		if jErr := output.WriteLintJUnit(".stagefreight/reports", findings, files, moduleNames, elapsed); jErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to write junit report: %v\n", jErr)
+		}
+	}
+
+	// ── Lint section ──
+	output.SectionStart(w, "sf_lint", "Lint")
+	sec := output.NewSection(w, "Lint", elapsed, color)
+	output.LintTable(w, modStats, color)
+	sec.Separator()
+	sec.Row("%-16s%5d   %5d   %d findings (%d critical)",
+		"total", totalFiles, totalCached, len(findings), critical)
+	sec.Close()
+	output.SectionEnd(w, "sf_lint")
+
+	// ── Findings section (only when findings > 0) ──
+	if len(findings) > 0 {
+		output.SectionStart(w, "sf_findings", "Findings")
+		fSec := output.NewSection(w, "Findings", 0, color)
+		output.SectionFindings(fSec, findings, color)
+		fSec.Separator()
+		fSec.Row(output.FindingsSummaryLine(len(findings), critical, warning, info, len(files), color))
+		fSec.Close()
+		output.SectionEnd(w, "sf_findings")
+	}
 
 	// Cache stats
 	if verbose && cache.Enabled {
@@ -146,7 +202,7 @@ func runLint(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", runErr)
 	}
 
-	if hasCritical {
+	if critical > 0 {
 		return fmt.Errorf("lint failed: %d critical findings", critical)
 	}
 
