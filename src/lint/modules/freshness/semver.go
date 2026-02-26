@@ -543,3 +543,15 @@ func tagNewer(a, b *decomposedTag) bool {
 	// Same rank — higher number wins (beta17 > beta13).
 	return a.PreNum > b.PreNum
 }
+
+// CompareDependencyVersions is the exported form of compareDependencyVersions.
+// It dispatches to ecosystem-aware version comparison and returns a VersionDelta.
+func CompareDependencyVersions(current, latest, ecosystem string) VersionDelta {
+	return compareDependencyVersions(current, latest, ecosystem)
+}
+
+// DominantUpdateType is the exported form of dominantUpdateType.
+// It returns "major", "minor", or "patch" for the highest-priority axis in a delta.
+func DominantUpdateType(d VersionDelta) string {
+	return dominantUpdateType(d)
+}

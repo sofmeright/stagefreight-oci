@@ -60,36 +60,35 @@ func (m *freshnessModule) Check(ctx context.Context, file lint.FileInfo) ([]lint
 		m.http = newHTTPClient(m.cfg.Timeout)
 	}
 
-	base := filepath.Base(file.Path)
-
-	var deps []Dependency
-	var err error
-
-	switch {
-	case isDockerfile(base):
-		deps, err = m.checkDockerfile(ctx, file)
-	case base == "go.mod":
-		deps, err = m.checkGoMod(ctx, file)
-	case base == "Cargo.toml":
-		deps, err = m.checkCargo(ctx, file)
-	case base == "package.json":
-		deps, err = m.checkNpm(ctx, file)
-	case base == "requirements.txt" || strings.HasPrefix(base, "requirements") && strings.HasSuffix(base, ".txt"):
-		deps, err = m.checkPip(ctx, file)
-	case base == "Pipfile":
-		deps, err = m.checkPip(ctx, file)
-	default:
-		return nil, nil
-	}
-
+	deps, err := m.resolveFile(ctx, file)
 	if err != nil {
 		return nil, err
 	}
 
-	// Correlate known vulnerabilities via OSV.
 	m.correlateVulns(ctx, deps)
-
 	return m.depsToFindings(deps), nil
+}
+
+// resolveFile dispatches to the appropriate checker based on filename
+// and returns raw Dependency structs (no lint-finding conversion).
+func (m *freshnessModule) resolveFile(ctx context.Context, file lint.FileInfo) ([]Dependency, error) {
+	base := filepath.Base(file.Path)
+	switch {
+	case isDockerfile(base):
+		return m.checkDockerfile(ctx, file)
+	case base == "go.mod":
+		return m.checkGoMod(ctx, file)
+	case base == "Cargo.toml":
+		return m.checkCargo(ctx, file)
+	case base == "package.json":
+		return m.checkNpm(ctx, file)
+	case base == "requirements.txt" || strings.HasPrefix(base, "requirements") && strings.HasSuffix(base, ".txt"):
+		return m.checkPip(ctx, file)
+	case base == "Pipfile":
+		return m.checkPip(ctx, file)
+	default:
+		return nil, nil
+	}
 }
 
 // depsToFindings converts resolved dependencies into lint findings,

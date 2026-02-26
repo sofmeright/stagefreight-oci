@@ -44,11 +44,6 @@ func init() {
 }
 
 func runComponentDocs(cmd *cobra.Command, args []string) error {
-	rootDir, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("getting working directory: %w", err)
-	}
-
 	// Resolve spec files: CLI flags → config → error.
 	specFiles := cdSpecs
 	if len(specFiles) == 0 {

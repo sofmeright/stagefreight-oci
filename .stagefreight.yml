@@ -129,9 +129,6 @@ lint:
           enabled: true
     tabs:
       enabled: true
-      exclude:
-        - "go.mod"
-        - "go.sum"
     secrets:
       enabled: true
     conflicts:

@@ -187,7 +187,7 @@ func runLint(cmd *cobra.Command, args []string) error {
 		fSec := output.NewSection(w, "Findings", 0, color)
 		output.SectionFindings(fSec, findings, color)
 		fSec.Separator()
-		fSec.Row(output.FindingsSummaryLine(len(findings), critical, warning, info, len(files), color))
+		fSec.Row("%s", output.FindingsSummaryLine(len(findings), critical, warning, info, len(files), color))
 		fSec.Close()
 		output.SectionEnd(w, "sf_findings")
 	}

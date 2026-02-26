@@ -125,7 +125,7 @@ func runReleaseBadge(cmd *cobra.Command, args []string) error {
 			if !target.SyncBadge {
 				continue
 			}
-			if !syncAllowed(target, currentTag, currentBranch) {
+			if !syncAllowed(target, currentTag, currentBranch, cfg.Git.Policy) {
 				continue
 			}
 

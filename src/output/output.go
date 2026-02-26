@@ -230,9 +230,9 @@ func SectionFindings(sec *Section, findings []lint.Finding, color bool) {
 		})
 
 		if color {
-			sec.Row(colorBold + file + colorReset)
+			sec.Row("%s", colorBold+file+colorReset)
 		} else {
-			sec.Row(file)
+			sec.Row("%s", file)
 		}
 
 		for _, f := range ff {

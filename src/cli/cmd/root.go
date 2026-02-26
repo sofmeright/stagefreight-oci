@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -46,6 +47,11 @@ func init() {
 // Execute runs the root command.
 func Execute() error {
 	if err := rootCmd.Execute(); err != nil {
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			fmt.Fprintln(os.Stderr, exitErr.Err)
+			os.Exit(exitErr.Code)
+		}
 		fmt.Fprintln(os.Stderr, err)
 		return err
 	}

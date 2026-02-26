@@ -20,9 +20,19 @@ func (m *tabsModule) Name() string        { return "tabs" }
 func (m *tabsModule) DefaultEnabled() bool { return true }
 func (m *tabsModule) AutoDetect() []string { return nil }
 
+// yamlTemplateSuffixes lists compound extensions where the inner layer is YAML.
+// Only high-confidence YAML-template conventions are included.
+// Bare .tpl is intentionally omitted — it's ambiguous (Helm uses it for non-YAML too).
+// Compound .yaml.tpl / .yml.tpl are included — the inner YAML extension makes them unambiguous.
+var yamlTemplateSuffixes = []string{
+	".yaml.gotmpl", ".yml.gotmpl",
+	".yaml.tmpl", ".yml.tmpl",
+	".yaml.tpl", ".yml.tpl",
+	".yaml.j2", ".yml.j2",
+}
+
 func (m *tabsModule) Check(ctx context.Context, file lint.FileInfo) ([]lint.Finding, error) {
-	// Skip files where tabs are conventional
-	if m.tabsExpected(file.Path) {
+	if !m.tabsForbidden(file.Path) {
 		return nil, nil
 	}
 
@@ -55,24 +65,24 @@ func (m *tabsModule) Check(ctx context.Context, file lint.FileInfo) ([]lint.Find
 	return findings, scanner.Err()
 }
 
-// tabsExpected returns true for file types where tab indentation is conventional.
-func (m *tabsModule) tabsExpected(path string) bool {
+// tabsForbidden returns true for file types where tab indentation breaks
+// syntax or is strongly discouraged by convention.
+// YAML (.yml, .yaml) and YAML templates (.yml.gotmpl, .yaml.tmpl, etc.).
+func (m *tabsModule) tabsForbidden(path string) bool {
 	base := filepath.Base(path)
 	ext := filepath.Ext(path)
 
-	// Go files use tabs by convention (gofmt)
-	if ext == ".go" {
+	// Direct YAML extensions
+	if ext == ".yml" || ext == ".yaml" {
 		return true
 	}
 
-	// Makefiles require tabs
-	if base == "Makefile" || base == "makefile" || base == "GNUmakefile" || ext == ".mk" {
-		return true
-	}
-
-	// .gitmodules, .gitconfig use tabs
-	if base == ".gitmodules" || base == ".gitconfig" {
-		return true
+	// YAML template files — match on full basename, not last extension
+	// (e.g. "values.yaml.gotmpl" has ext=".gotmpl" but is YAML)
+	for _, suffix := range yamlTemplateSuffixes {
+		if strings.HasSuffix(base, suffix) {
+			return true
+		}
 	}
 
 	return false

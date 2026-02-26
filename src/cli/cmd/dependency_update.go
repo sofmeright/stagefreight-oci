@@ -1,0 +1,300 @@
+package cmd
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+	"github.com/sofmeright/stagefreight/src/dependency"
+	"github.com/sofmeright/stagefreight/src/lint"
+	"github.com/sofmeright/stagefreight/src/lint/modules/freshness"
+	"github.com/sofmeright/stagefreight/src/output"
+)
+
+// ExitError wraps an error with a process exit code.
+type ExitError struct {
+	Code int
+	Err  error
+}
+
+func (e *ExitError) Error() string { return e.Err.Error() }
+func (e *ExitError) Unwrap() error { return e.Err }
+
+// Exit codes for dependency update.
+const (
+	exitOK         = 0
+	exitVerifyFail = 1
+	exitUpdateFail = 2
+)
+
+var (
+	depDryRun     bool
+	depBundle     bool
+	depNoVerify   bool
+	depNoVuln     bool
+	depEcosystems []string
+	depOutputDir  string
+	depPolicy     string
+)
+
+var dependencyUpdateCmd = &cobra.Command{
+	Use:   "update [path]",
+	Short: "Update outdated dependencies",
+	Long: `Resolve, update, and verify project dependencies.
+
+Generates artifacts: deps.patch, deps-report.md, resolve.json.
+Use --dry-run to resolve and report without applying changes.`,
+	RunE: runDependencyUpdate,
+}
+
+func init() {
+	dependencyUpdateCmd.Flags().BoolVar(&depDryRun, "dry-run", false, "resolve and report without applying changes")
+	dependencyUpdateCmd.Flags().BoolVar(&depBundle, "bundle", false, "include deps-updated.tgz")
+	dependencyUpdateCmd.Flags().BoolVar(&depNoVerify, "no-verify", false, "skip go test after update")
+	dependencyUpdateCmd.Flags().BoolVar(&depNoVuln, "no-vulncheck", false, "skip govulncheck after update")
+	dependencyUpdateCmd.Flags().StringSliceVar(&depEcosystems, "ecosystem", nil, "filter to specific ecosystem(s)")
+	dependencyUpdateCmd.Flags().StringVar(&depOutputDir, "output", ".stagefreight/deps", "output directory for artifacts")
+	dependencyUpdateCmd.Flags().StringVar(&depPolicy, "policy", "all", "update policy: all, security")
+
+	dependencyCmd.AddCommand(dependencyUpdateCmd)
+}
+
+func runDependencyUpdate(cmd *cobra.Command, args []string) error {
+	// Validate policy
+	if depPolicy != "all" && depPolicy != "security" {
+		return &ExitError{
+			Code: exitUpdateFail,
+			Err:  fmt.Errorf("unknown policy %q: valid values are \"all\", \"security\"", depPolicy),
+		}
+	}
+
+	rootDir, err := os.Getwd()
+	if err != nil {
+		return &ExitError{Code: exitUpdateFail, Err: fmt.Errorf("getting working directory: %w", err)}
+	}
+	if len(args) > 0 {
+		rootDir = args[0]
+	}
+
+	ctx := context.Background()
+	color := output.UseColor()
+	w := os.Stdout
+
+	// Load freshness options from config
+	var freshnessOpts map[string]any
+	if mc, ok := cfg.Lint.Modules["freshness"]; ok {
+		freshnessOpts = mc.Options
+	}
+
+	// Collect files via lint engine (reuse existing patterns)
+	start := time.Now()
+	output.SectionStart(w, "sf_deps_resolve", "Resolve")
+
+	engine, err := lint.NewEngine(cfg.Lint, rootDir, []string{"freshness"}, nil, verbose, nil)
+	if err != nil {
+		output.SectionEnd(w, "sf_deps_resolve")
+		return &ExitError{Code: exitUpdateFail, Err: fmt.Errorf("creating lint engine: %w", err)}
+	}
+
+	files, err := engine.CollectFiles()
+	if err != nil {
+		output.SectionEnd(w, "sf_deps_resolve")
+		return &ExitError{Code: exitUpdateFail, Err: fmt.Errorf("collecting files: %w", err)}
+	}
+
+	// Resolve dependencies
+	deps, err := freshness.ResolveDeps(ctx, freshnessOpts, files)
+	if err != nil {
+		output.SectionEnd(w, "sf_deps_resolve")
+		return &ExitError{Code: exitUpdateFail, Err: fmt.Errorf("resolving dependencies: %w", err)}
+	}
+
+	resolveElapsed := time.Since(start)
+	sec := output.NewSection(w, "Resolve", resolveElapsed, color)
+	sec.Row("%-16s%d", "files scanned", len(files))
+	sec.Row("%-16s%d", "dependencies", len(deps))
+
+	outdated := 0
+	withCVE := 0
+	for _, d := range deps {
+		if d.Latest != "" && d.Current != d.Latest {
+			outdated++
+		}
+		if len(d.Vulnerabilities) > 0 {
+			withCVE++
+		}
+	}
+	sec.Row("%-16s%d", "outdated", outdated)
+	sec.Row("%-16s%d", "with CVEs", withCVE)
+	sec.Close()
+	output.SectionEnd(w, "sf_deps_resolve")
+
+	// Build update config
+	updateCfg := dependency.UpdateConfig{
+		RootDir:    rootDir,
+		OutputDir:  depOutputDir,
+		DryRun:     depDryRun,
+		Bundle:     depBundle,
+		Verify:     !depNoVerify,
+		Vulncheck:  !depNoVuln,
+		Ecosystems: depEcosystems,
+		Policy:     depPolicy,
+	}
+
+	if depDryRun {
+		// Dry run: generate resolve.json + report only
+		return runDryRun(ctx, w, color, updateCfg, deps)
+	}
+
+	// Apply updates
+	output.SectionStart(w, "sf_deps_update", "Update")
+	updateStart := time.Now()
+
+	result, err := dependency.Update(ctx, updateCfg, deps)
+	updateElapsed := time.Since(updateStart)
+
+	// Defense-in-depth: Update() should always return non-nil result,
+	// but guard against regressions to prevent nil-deref panics.
+	if err != nil && result == nil {
+		output.SectionEnd(w, "sf_deps_update")
+		return &ExitError{Code: exitUpdateFail, Err: fmt.Errorf("dependency.Update returned nil result: %w", err)}
+	}
+
+	updateSec := output.NewSection(w, "Update", updateElapsed, color)
+	updateSec.Row("%-16s%d", "applied", len(result.Applied))
+	updateSec.Row("%-16s%d", "skipped", len(result.Skipped))
+
+	if result.Verified {
+		status := "success"
+		if result.VerifyErr != nil {
+			status = "failed"
+		}
+		output.RowStatus(updateSec, "verify", "", status, color)
+	}
+
+	updateSec.Separator()
+
+	// Artifacts — print absolute paths for CI clarity
+	for _, a := range result.Artifacts {
+		abs, _ := filepath.Abs(a)
+		updateSec.Row("artifact  %s", abs)
+	}
+	updateSec.Close()
+	output.SectionEnd(w, "sf_deps_update")
+
+	if err != nil {
+		return &ExitError{Code: exitUpdateFail, Err: err}
+	}
+
+	if result.VerifyErr != nil {
+		return &ExitError{Code: exitVerifyFail, Err: result.VerifyErr}
+	}
+
+	return nil
+}
+
+func runDryRun(ctx context.Context, w *os.File, color bool, cfg dependency.UpdateConfig, deps []freshness.Dependency) error {
+	output.SectionStart(w, "sf_deps_dryrun", "Dry Run")
+	start := time.Now()
+
+	// Discover repo root for artifact generation
+	repoRoot, err := discoverRepoRootFromDir(cfg.RootDir)
+	if err != nil {
+		output.SectionEnd(w, "sf_deps_dryrun")
+		return &ExitError{Code: exitUpdateFail, Err: fmt.Errorf("not a git repository: %w", err)}
+	}
+
+	// Get tracked files for filtering
+	trackedFiles, err := gitTrackedFilesFromDir(ctx, repoRoot)
+	if err != nil {
+		trackedFiles = nil // non-fatal for dry-run
+	}
+
+	// Filter to show what would be updated
+	candidates, skipped := dependency.FilterUpdateCandidates(deps, cfg, trackedFiles)
+
+	// Build a dry-run result for artifact generation
+	result := &dependency.UpdateResult{
+		Skipped: skipped,
+	}
+	for _, c := range candidates {
+		result.Applied = append(result.Applied, dependency.AppliedUpdate{
+			Dep:        c,
+			OldVer:     c.Current,
+			NewVer:     c.Latest,
+			UpdateType: dryRunUpdateType(c),
+		})
+	}
+
+	// Generate resolve.json + report (no patch in dry-run)
+	outputDir := cfg.OutputDir
+	if outputDir == "" {
+		outputDir = ".stagefreight/deps"
+	}
+	if !filepath.IsAbs(outputDir) {
+		outputDir = filepath.Join(repoRoot, outputDir)
+	}
+
+	artifacts, genErr := dependency.GenerateArtifacts(ctx, repoRoot, outputDir, result, false)
+
+	elapsed := time.Since(start)
+	sec := output.NewSection(w, "Dry Run", elapsed, color)
+	sec.Row("%-16s%d", "would update", len(candidates))
+	sec.Row("%-16s%d", "would skip", len(skipped))
+	sec.Separator()
+
+	for _, a := range artifacts {
+		abs, _ := filepath.Abs(a)
+		sec.Row("artifact  %s", abs)
+	}
+	sec.Close()
+	output.SectionEnd(w, "sf_deps_dryrun")
+
+	if genErr != nil {
+		return &ExitError{Code: exitUpdateFail, Err: fmt.Errorf("generating artifacts: %w", genErr)}
+	}
+
+	return nil
+}
+
+func dryRunUpdateType(dep freshness.Dependency) string {
+	if dep.Latest == "" || dep.Current == dep.Latest {
+		return "tag"
+	}
+	delta := freshness.CompareDependencyVersions(dep.Current, dep.Latest, dep.Ecosystem)
+	if delta.IsZero() {
+		return "tag"
+	}
+	return freshness.DominantUpdateType(delta)
+}
+
+// discoverRepoRootFromDir wraps git rev-parse for the CLI layer.
+func discoverRepoRootFromDir(dir string) (string, error) {
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func gitTrackedFilesFromDir(ctx context.Context, repoRoot string) (map[string]bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "ls-files")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	tracked := make(map[string]bool, len(lines))
+	for _, l := range lines {
+		if l != "" {
+			tracked[l] = true
+		}
+	}
+	return tracked, nil
+}
