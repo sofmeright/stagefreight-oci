@@ -256,5 +256,9 @@ func SectionFindings(sec *Section, findings []lint.Finding, color bool) {
 // RowStatus writes a row with label, detail, and a status icon.
 func RowStatus(sec *Section, label, detail, status string, color bool) {
 	icon := StatusIcon(status, color)
-	sec.Row("%-16s%-38s %s", label, detail, icon)
+	if detail != "" {
+		sec.Row("%s — %s %s", label, detail, icon)
+	} else {
+		sec.Row("%s %s", label, icon)
+	}
 }

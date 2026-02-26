@@ -108,9 +108,15 @@ func runDockerReadme(cmd *cobra.Command, args []string) error {
 // returning results for each. Used by standalone `docker readme` command.
 func syncReadmeCollect(ctx context.Context, readmeCfg config.DockerReadmeConfig, registries []config.RegistryConfig, content *registry.ReadmeContent) []readmeSyncResult {
 	var results []readmeSyncResult
+	seen := make(map[string]bool)
 
 	for _, reg := range registries {
 		name := reg.URL + "/" + reg.Path
+
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
 
 		provider := reg.Provider
 		if provider == "" {
@@ -162,7 +168,14 @@ func syncReadmeCollect(ctx context.Context, readmeCfg config.DockerReadmeConfig,
 // Returns counts of synced, skipped, and errored registries.
 // Used by the docker build pipeline — left untouched for pipeline compatibility.
 func syncReadmeToRegistries(ctx context.Context, w io.Writer, readmeCfg config.DockerReadmeConfig, registries []config.RegistryConfig, content *registry.ReadmeContent) (synced, skipped, errors int) {
+	seen := make(map[string]bool)
 	for _, reg := range registries {
+		name := reg.URL + "/" + reg.Path
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+
 		provider := reg.Provider
 		if provider == "" {
 			provider = "generic"
