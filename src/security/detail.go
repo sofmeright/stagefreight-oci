@@ -31,5 +31,5 @@ func ResolveDetailLevel(cfg config.SecurityConfig, cliOverride string, policy co
 	if cfg.ReleaseDetail != "" {
 		return cfg.ReleaseDetail
 	}
-	return "counts"
+	return "detailed"
 }
