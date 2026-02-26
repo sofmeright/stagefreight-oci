@@ -17,20 +17,18 @@ type ModuleConfig struct {
 
 // LintConfig holds lint-specific configuration.
 type LintConfig struct {
-	Level         Level                   `yaml:"level"`
-	CacheDir      string                  `yaml:"cache_dir"`
-	TargetBranch  string                  `yaml:"target_branch"`
-	Exclude       []string                `yaml:"exclude"`
-	Modules       map[string]ModuleConfig `yaml:"modules"`
-	LargeFilesMax int64                   `yaml:"large_files_max"`
+	Level        Level                   `yaml:"level"`
+	CacheDir     string                  `yaml:"cache_dir"`
+	TargetBranch string                  `yaml:"target_branch"`
+	Exclude      []string                `yaml:"exclude"`
+	Modules      map[string]ModuleConfig `yaml:"modules"`
 }
 
 // DefaultLintConfig returns production defaults.
 func DefaultLintConfig() LintConfig {
 	return LintConfig{
-		Level:         LevelChanged,
-		Exclude:       []string{},
-		Modules:       map[string]ModuleConfig{},
-		LargeFilesMax: 500 * 1024, // 500 KB
+		Level:   LevelChanged,
+		Exclude: []string{},
+		Modules: map[string]ModuleConfig{},
 	}
 }

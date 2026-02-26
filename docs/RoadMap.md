@@ -1078,8 +1078,10 @@ lint:
     secrets: true                   # individually toggle any module
     unicode: true
     yaml: true
-    large_files: true
-    large_files_max: 500KB          # module-specific tuning
+    filesize:
+      enabled: true
+      options:
+        max_bytes: 524288            # module-specific tuning (500 KB)
     conflicts: true
     line_endings: true
     tabs: false                     # example: disable for a project that uses tabs
@@ -4166,7 +4168,7 @@ is escalated to critical and reported regardless of module-specific tolerance.
 | `line_endings` | 0 (info) |
 | `unicode` | 2 (critical) |
 | `conflicts` | 2 (critical) |
-| `large_files` | 1 (warning), threshold: `"5MB"` |
+| `filesize` | 1 (warning), default threshold: 500 KB |
 
 #### `repository`
 

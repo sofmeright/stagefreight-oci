@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -78,9 +79,15 @@ func runSecurityScan(cmd *cobra.Command, args []string) error {
 	w := os.Stdout
 
 	ctx := context.Background()
+
+	// Collapse raw Trivy/Syft output in GitLab CI.
+	output.SectionStartCollapsed(os.Stderr, "sf_trivy_raw", "Trivy / Syft (raw)")
+
 	start := time.Now()
 	result, err := security.Scan(ctx, scanCfg)
 	elapsed := time.Since(start)
+
+	output.SectionEnd(os.Stderr, "sf_trivy_raw")
 
 	if err != nil {
 		return fmt.Errorf("security scan: %w", err)
@@ -122,18 +129,52 @@ func runSecurityScan(cmd *cobra.Command, args []string) error {
 		statusDetail = result.Status
 	}
 
+	// Build SecurityUX from config + env overrides + defaults.
+	ux := buildSecurityUX(cfg.Security.OverwhelmMessage, cfg.Security.OverwhelmLink)
+
 	// ── Security Scan section ──
 	output.SectionStart(w, "sf_security", "Security Scan")
 	sec := output.NewSection(w, "Security Scan", elapsed, color)
-	sec.Row("%-16s%s", "image", imageRef)
-	sec.Row("%-16s%s %s", "status", statusDetail, output.StatusIcon(status, color))
 
-	if len(artifacts) > 0 {
-		sec.Row("")
-		sec.Row("artifacts")
-		for _, a := range artifacts {
-			sec.Row("  → %s", a)
+	sec.Row("%-16s%s", "image", imageRef)
+	output.ScanAuditRows(sec, output.ScanAudit{
+		Engine: result.EngineVersion,
+		OS:     result.OS,
+	})
+
+	// Vuln table gated on detail level.
+	switch detail {
+	case "none":
+		// skip entirely
+	case "counts":
+		total := result.Critical + result.High + result.Medium + result.Low
+		if total > 0 {
+			sec.Row("")
+			sec.Row("%-16s%d total (%d critical, %d high, %d medium, %d low)",
+				"vulnerabilities", total, result.Critical, result.High, result.Medium, result.Low)
 		}
+	case "detailed":
+		vulnRows := toVulnRows(result.Vulnerabilities)
+		output.SectionVulns(sec, vulnRows, color, output.SoftBudget, ux)
+	case "full":
+		vulnRows := toVulnRows(result.Vulnerabilities)
+		output.SectionVulns(sec, vulnRows, color, output.HardBudget, ux)
+	default:
+		// unrecognized → treat as counts
+		total := result.Critical + result.High + result.Medium + result.Low
+		if total > 0 {
+			sec.Row("")
+			sec.Row("%-16s%d total (%d critical, %d high, %d medium, %d low)",
+				"vulnerabilities", total, result.Critical, result.High, result.Medium, result.Low)
+		}
+	}
+
+	sec.Separator()
+	output.RowStatus(sec, "status", statusDetail, status, color)
+	sec.Separator()
+
+	for _, a := range artifacts {
+		sec.Row("artifact  %s", a)
 	}
 
 	sec.Close()
@@ -151,4 +192,58 @@ func runSecurityScan(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// toVulnRows converts security.Vulnerability slice to output.VulnRow slice.
+func toVulnRows(vulns []security.Vulnerability) []output.VulnRow {
+	rows := make([]output.VulnRow, len(vulns))
+	for i, v := range vulns {
+		rows[i] = output.VulnRow{
+			ID:        v.ID,
+			Severity:  v.Severity,
+			Package:   v.Package,
+			Installed: v.Installed,
+			FixedIn:   v.FixedIn,
+			Title:     v.Description,
+		}
+	}
+	return rows
+}
+
+// buildSecurityUX resolves overwhelm message/link from config + env overrides + defaults.
+func buildSecurityUX(cfgMessage []string, cfgLink string) output.SecurityUX {
+	ux := output.SecurityUX{
+		OverwhelmMessage: cfgMessage,
+		OverwhelmLink:    cfgLink,
+	}
+
+	// Env overrides (LookupEnv — empty string = explicit disable).
+	envMsg, envMsgSet := os.LookupEnv("STAGEFREIGHT_SECURITY_OVERWHELM_MESSAGE")
+	if envMsgSet {
+		if envMsg == "" {
+			ux.OverwhelmMessage = nil
+		} else {
+			lines := strings.Split(envMsg, "\n")
+			for i := range lines {
+				lines[i] = strings.TrimRight(lines[i], "\r")
+			}
+			for len(lines) > 0 && lines[len(lines)-1] == "" {
+				lines = lines[:len(lines)-1]
+			}
+			ux.OverwhelmMessage = lines
+		}
+	}
+
+	envLink, envLinkSet := os.LookupEnv("STAGEFREIGHT_SECURITY_OVERWHELM_LINK")
+	if envLinkSet {
+		ux.OverwhelmLink = envLink
+	}
+
+	// Defaults only when nothing configured AND nothing overridden.
+	if !envMsgSet && !envLinkSet && len(cfgMessage) == 0 && cfgLink == "" {
+		ux.OverwhelmMessage = output.DefaultOverwhelmMessage
+		ux.OverwhelmLink = output.DefaultOverwhelmLink
+	}
+
+	return ux
 }

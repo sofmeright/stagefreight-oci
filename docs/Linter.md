@@ -23,10 +23,6 @@ lint:
     - "vendor/**"
     - "*.generated.go"
 
-  # Max file size for largefiles module (bytes)
-  # Default: 500KB (512000)
-  large_files_max: 512000
-
   modules:
     # ...
 ```
@@ -36,7 +32,6 @@ lint:
 | `level` | `"changed"` \| `"full"` | `"changed"` | CLI `--level` overrides config |
 | `cache_dir` | string | XDG default | Relative to repo root unless absolute |
 | `exclude` | list of glob | `[]` | Matched against relative path and basename |
-| `large_files_max` | int (bytes) | `512000` | Threshold for the largefiles module |
 
 ---
 
@@ -65,8 +60,11 @@ produces the same findings.
     conflicts:
       enabled: true
 
-    largefiles:
+    filesize:
       enabled: true
+
+    linecount:
+      enabled: false
 
     tabs:
       enabled: true
@@ -80,6 +78,37 @@ produces the same findings.
     lineendings:
       enabled: true
 ```
+
+#### File Size Module
+
+Detects files that exceed a configurable size threshold.
+
+```yaml
+    filesize:
+      enabled: true
+      options:
+        max_bytes: 524288    # bytes; default: 524288 (500 KB)
+```
+
+| Option | Type | Default | Notes |
+|--------|------|---------|-------|
+| `max_bytes` | int (bytes) | `524288` (500 KB) | 0 → use default; negative values rejected |
+
+#### Line Count Module
+
+Detects files that exceed a configurable line count threshold.
+**Default disabled** — opt-in only.
+
+```yaml
+    linecount:
+      enabled: true
+      options:
+        max_lines: 500       # default: 1000
+```
+
+| Option | Type | Default | Notes |
+|--------|------|---------|-------|
+| `max_lines` | int | `1000` | 0 → use default; negative values rejected |
 
 #### Unicode Module
 
@@ -320,7 +349,7 @@ modules that depend on external state.
 
 Modules that do not implement `CacheTTLModule` are cached forever by
 content hash. This is correct for deterministic modules (secrets,
-conflicts, largefiles) where the same file content always produces the
+conflicts, filesize) where the same file content always produces the
 same findings.
 
 External-state modules (freshness) implement `CacheTTLModule` to declare

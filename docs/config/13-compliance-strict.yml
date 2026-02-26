@@ -34,8 +34,10 @@ lint:
     secrets: true
     unicode: true
     yaml: true
-    large_files: true
-    large_files_max: 200KB            # stricter file size limit for compliance repos
+    filesize:
+      enabled: true
+      options:
+        max_bytes: 204800             # 200 KB — stricter limit for compliance repos
     conflicts: true
     line_endings: true
     tabs: true

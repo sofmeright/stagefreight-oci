@@ -133,7 +133,7 @@ lint:
       enabled: true
     conflicts:
       enabled: true
-    largefiles:
+    filesize:
       enabled: true
     unicode:
       enabled: true
