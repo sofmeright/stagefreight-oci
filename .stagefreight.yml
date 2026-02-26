@@ -109,6 +109,13 @@ gitlab_component:
 
 lint:
   level: full
+  exclude:
+    - "*.ttf"
+    - "*.png"
+    - "*.jpg"
+    - "*.ico"
+    - "*.woff"
+    - "*.woff2"
   modules:
     freshness:
       enabled: true
