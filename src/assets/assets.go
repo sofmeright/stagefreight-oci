@@ -1,7 +1,0 @@
-// Package assets provides embedded static assets shared across StageFreight packages.
-package assets
-
-import _ "embed"
-
-//go:embed logo.png
-var LogoPNG []byte

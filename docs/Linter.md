@@ -81,6 +81,86 @@ produces the same findings.
       enabled: true
 ```
 
+#### Unicode Module
+
+Detects invisible, confusable, and dangerous Unicode characters —
+supply-chain defense against trojan-source attacks, invisible text
+obfuscation, and control byte smuggling.
+
+##### Detection Categories
+
+| Category | Config Key | Default | Severity | Allowlist-Bypassable |
+|----------|-----------|---------|----------|---------------------|
+| BiDi overrides | `detect_bidi` | `true` | critical | No |
+| Zero-width chars | `detect_zero_width` | `true` | critical | No |
+| ASCII control bytes | `detect_control_ascii` | `true` | warning | Yes (path-scoped) |
+| Tag characters | — | always on | critical | No |
+| Confusable whitespace | — | always on | warning | No |
+| Invalid UTF-8 | — | always on | warning | No |
+
+The three toggleable categories (`detect_bidi`, `detect_zero_width`,
+`detect_control_ascii`) default to `true`. All other categories are
+always on — there is no toggle or allowlist bypass for them.
+
+##### Path-Scoped ASCII Control Allowlist
+
+The allowlist gates **only** `ASCII control bytes`. BiDi, zero-width,
+and all other categories fire regardless of path — even if the file
+is on the allowlist.
+
+```yaml
+    unicode:
+      enabled: true
+      options:
+        detect_bidi: true
+        detect_zero_width: true
+        detect_control_ascii: true
+
+        # Paths where specific control bytes are permitted:
+        allow_control_ascii_in_paths:
+          - "src/output/banner_art.go"
+
+        # Which bytes to allow (0–31, excluding 9/10/13):
+        allow_control_ascii: [27]   # ESC only
+```
+
+`allow_control_ascii_in_paths` accepts glob patterns (same syntax as
+top-level `exclude:`). A control byte is suppressed only when **both**
+the byte appears in `allow_control_ascii` **and** the file path matches
+at least one pattern.
+
+##### Config Validation
+
+| Constraint | Error |
+|------------|-------|
+| Value outside 0–31 | rejected (must be ASCII control range) |
+| Tab (9), newline (10), CR (13) | rejected — always ignored by the scanner; listing them misleads readers |
+| Duplicate values | silently de-duped (map-based) |
+
+##### Example: Allowing ESC in ANSI Art Files
+
+CLI tools that embed prerendered ANSI art (e.g., terminal banners with
+color sequences) may need to allow `ESC` (0x1B) in specific files.
+
+```yaml
+    unicode:
+      options:
+        detect_control_ascii: true
+        allow_control_ascii_in_paths:
+          - "src/output/banner_art.go"
+        allow_control_ascii: [27]   # ESC only
+```
+
+The exception is intentionally narrow:
+
+- Only ESC (27) is allowed — no other control byte
+- Only in the listed path(s) — everywhere else, ESC is flagged
+- BiDi and zero-width still fire as critical even in allowed paths
+
+**Preferred alternative**: generate ANSI art at build time using escaped
+Go string literals (`\x1b[...` not raw ESC bytes). This eliminates the
+need for any allowlist — StageFreight itself uses this approach.
+
 ---
 
 ### Freshness Module (External-State, TTL-Aware)

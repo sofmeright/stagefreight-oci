@@ -129,15 +129,9 @@ lint:
     unicode:
       enabled: true
       options:
-        # SUPPLY-CHAIN POSTURE:
-        # - We treat BiDi overrides and zero-width characters as *critical* everywhere because they are
-        #   a known class of "trojan source" / invisible-text obfuscation.
-        # - We allow ONLY ASCII ESC (27) and ONLY in the prerendered banner art file, because that file
-        #   intentionally embeds ANSI sequences for CLI rendering.
-        # - Do NOT broaden this allowlist unless you have a specific, audited reason.
+        # Unicode / invisible text defense — see docs/Linter.md § Unicode
+        # No allowlist needed: banner art is build-generated with escaped
+        # string literals (no raw control bytes in source).
         detect_bidi: true
         detect_zero_width: true
         detect_control_ascii: true
-        allow_control_ascii_in_paths:
-          - "src/output/banner_art.go"
-        allow_control_ascii: [27]

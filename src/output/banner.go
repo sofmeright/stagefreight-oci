@@ -3,12 +3,8 @@ package output
 import (
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
-
-	"github.com/sofmeright/stagefreight/src/assets"
 )
 
 // BannerInfo holds the identity fields displayed alongside the logo.
@@ -20,24 +16,22 @@ type BannerInfo struct {
 }
 
 // Banner prints the StageFreight logo banner with version info.
-// Text identity fields appear on the left; the logo art on the right.
-// Three rendering paths:
-//   - Color + chafa available: runtime 256-color render via chafa
-//   - Color, no chafa: prerendered 256-color art embedded at build time
-//   - No-color: prerendered greyscale 256-color art
+// Two rendering paths:
+//   - Color + generated art: composited text (left) + ANSI art (right)
+//   - No-color or no art: text-only identity output
 func Banner(w io.Writer, info BannerInfo, color bool) {
-	var artLines []string
-	if color {
-		artLines = renderLogo()
-		if artLines == nil {
-			artLines = splitPrerendered(prerenderedColor)
-		}
-	} else {
-		artLines = splitPrerendered(prerenderedGray)
-	}
-
 	textItems := buildIdentityText(info, color)
-	printBanner(w, artLines, textItems)
+	if color && BannerArtANSI != "" {
+		artLines := splitPrerendered(BannerArtANSI)
+		printBanner(w, artLines, textItems)
+	} else {
+		// No-color or no generated art: text-only output.
+		fmt.Fprintln(w)
+		for _, item := range textItems {
+			fmt.Fprintln(w, item)
+		}
+		fmt.Fprintln(w)
+	}
 }
 
 // buildIdentityText assembles the identity lines shown beside the logo.
@@ -167,44 +161,6 @@ func isBlankAnsiLine(s string) bool {
 		}
 	}
 	return true
-}
-
-// renderLogo writes the embedded PNG to a temp file and runs chafa.
-// Returns nil if chafa is not available or fails.
-func renderLogo() []string {
-	chafaPath, err := exec.LookPath("chafa")
-	if err != nil {
-		return nil
-	}
-
-	tmp, err := os.CreateTemp("", "sf-logo-*.png")
-	if err != nil {
-		return nil
-	}
-	defer os.Remove(tmp.Name())
-
-	if _, err := tmp.Write(assets.LogoPNG); err != nil {
-		tmp.Close()
-		return nil
-	}
-	tmp.Close()
-
-	cmd := exec.Command(chafaPath, "-s", "34x17", "--symbols", "block", "--work", "9", "--colors", "256", tmp.Name())
-	out, err := cmd.Output()
-	if err != nil {
-		return nil
-	}
-
-	raw := strings.TrimRight(string(out), "\n")
-	raw = strings.ReplaceAll(raw, "\033[?25l", "")
-	raw = strings.ReplaceAll(raw, "\033[?25h", "")
-	raw = strings.TrimRight(raw, "\n")
-
-	lines := stripBlankArtLines(strings.Split(raw, "\n"))
-	if len(lines) == 0 {
-		return nil
-	}
-	return lines
 }
 
 // NewBannerInfo creates a BannerInfo with today's date.

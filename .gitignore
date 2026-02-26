@@ -1,2 +1,3 @@
 .stagefreight/*
 !.stagefreight/badges/
+src/output/banner_art_gen.go

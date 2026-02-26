@@ -1,18 +1,22 @@
 # ---- Go build stage ----
 FROM docker.io/library/golang:1.25-alpine AS builder
 
-RUN apk add --no-cache git
+RUN apk add --no-cache git chafa
 
 WORKDIR /src
 COPY go.mod go.sum* ./
 COPY src/ ./src/
+COPY cmd/ ./cmd/
 RUN go mod tidy
+
+# Generate banner art from logo.png (produces banner_art_gen.go with escaped ANSI).
+RUN go generate ./src/output/...
 
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
 
-RUN CGO_ENABLED=0 go build \
+RUN CGO_ENABLED=0 go build -tags banner_art \
       -ldflags "-s -w \
         -X github.com/sofmeright/stagefreight/src/version.Version=${VERSION} \
         -X github.com/sofmeright/stagefreight/src/version.Commit=${COMMIT} \
