@@ -465,7 +465,7 @@ func runPreBuildLint(ctx context.Context, rootDir string, ci bool, color bool, w
 	elapsed := time.Since(start)
 
 	// Tally
-	var critical, warning int
+	var critical, warning, info int
 	var totalFiles, totalCached int
 	for _, f := range findings {
 		switch f.Severity {
@@ -473,6 +473,8 @@ func runPreBuildLint(ctx context.Context, rootDir string, ci bool, color bool, w
 			critical++
 		case lint.SeverityWarning:
 			warning++
+		case lint.SeverityInfo:
+			info++
 		}
 	}
 	for _, ms := range modStats {
@@ -496,9 +498,15 @@ func runPreBuildLint(ctx context.Context, rootDir string, ci bool, color bool, w
 		"total", totalFiles, totalCached, len(findings), critical)
 	sec.Close()
 
+	if len(findings) > 0 {
+		fSec := output.NewSection(w, "Findings", 0, color)
+		output.SectionFindings(fSec, findings, color)
+		fSec.Separator()
+		fSec.Row("%s", output.FindingsSummaryLine(len(findings), critical, warning, info, len(files), color))
+		fSec.Close()
+	}
+
 	if critical > 0 {
-		printer := output.NewPrinter()
-		printer.Print(findings)
 		summary := fmt.Sprintf("%d files, %d cached, %d critical", len(files), totalCached, critical)
 		return summary, fmt.Errorf("lint failed: %d critical findings", critical)
 	}

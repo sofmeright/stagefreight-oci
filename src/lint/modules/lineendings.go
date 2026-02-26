@@ -39,6 +39,7 @@ func (m *lineEndingsModule) Check(ctx context.Context, file lint.FileInfo) ([]li
 	if crlfCount > 0 && lfCount > 0 {
 		findings = append(findings, lint.Finding{
 			File:     file.Path,
+			Line:     1,
 			Module:   m.Name(),
 			Severity: lint.SeverityWarning,
 			Message:  "mixed line endings (CRLF and LF)",
@@ -49,6 +50,7 @@ func (m *lineEndingsModule) Check(ctx context.Context, file lint.FileInfo) ([]li
 	if crlfCount > 0 && lfCount == 0 {
 		findings = append(findings, lint.Finding{
 			File:     file.Path,
+			Line:     1,
 			Module:   m.Name(),
 			Severity: lint.SeverityInfo,
 			Message:  "file uses CRLF line endings",

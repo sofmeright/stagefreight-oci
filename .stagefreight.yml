@@ -135,8 +135,6 @@ lint:
       enabled: true
     filesize:
       enabled: true
-    linecount:
-      enabled: true
     unicode:
       enabled: true
       options:

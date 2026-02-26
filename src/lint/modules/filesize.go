@@ -58,6 +58,7 @@ func (m *filesizeModule) Check(ctx context.Context, file lint.FileInfo) ([]lint.
 	return []lint.Finding{
 		{
 			File:     file.Path,
+			Line:     1,
 			Module:   m.Name(),
 			Severity: lint.SeverityWarning,
 			Message:  fmt.Sprintf("file size %s exceeds threshold %s", humanSize(file.Size), humanSize(m.cfg.MaxBytes)),

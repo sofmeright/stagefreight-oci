@@ -27,7 +27,7 @@ type linecountModule struct {
 }
 
 func (m *linecountModule) Name() string        { return "linecount" }
-func (m *linecountModule) DefaultEnabled() bool { return false }
+func (m *linecountModule) DefaultEnabled() bool { return true }
 func (m *linecountModule) AutoDetect() []string { return nil }
 
 // Configure implements lint.ConfigurableModule.
@@ -70,6 +70,7 @@ func (m *linecountModule) Check(ctx context.Context, file lint.FileInfo) ([]lint
 	return []lint.Finding{
 		{
 			File:     file.Path,
+			Line:     count,
 			Module:   m.Name(),
 			Severity: lint.SeverityWarning,
 			Message:  fmt.Sprintf("file has %d lines, exceeds threshold %d", count, m.cfg.MaxLines),

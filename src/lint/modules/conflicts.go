@@ -83,6 +83,7 @@ func CheckFilenameCollisions(files []lint.FileInfo) []lint.Finding {
 		if original, exists := seen[lower]; exists && original != f.Path {
 			findings = append(findings, lint.Finding{
 				File:     f.Path,
+				Line:     1,
 				Module:   "conflicts",
 				Severity: lint.SeverityWarning,
 				Message:  "case-insensitive filename collision with " + original,

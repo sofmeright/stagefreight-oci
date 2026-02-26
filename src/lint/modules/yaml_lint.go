@@ -49,6 +49,7 @@ func (m *yamlModule) Check(ctx context.Context, file lint.FileInfo) ([]lint.Find
 			}
 			findings = append(findings, lint.Finding{
 				File:     file.Path,
+				Line:     1,
 				Module:   m.Name(),
 				Severity: lint.SeverityCritical,
 				Message:  fmt.Sprintf("YAML parse error: %v", err),

@@ -236,7 +236,15 @@ func SectionFindings(sec *Section, findings []lint.Finding, color bool) {
 		}
 
 		for _, f := range ff {
-			loc := fmt.Sprintf("%d:%d", f.Line, f.Column)
+			var loc string
+			switch {
+			case f.Line == 0:
+				loc = "-"
+			case f.Column > 0:
+				loc = fmt.Sprintf("%d:%d", f.Line, f.Column)
+			default:
+				loc = fmt.Sprintf("%d", f.Line)
+			}
 			sev := severityTag(f.Severity, color)
 			sec.Row("  %-8s %-4s  %-10s %s", loc, sev, f.Module, f.Message)
 		}
