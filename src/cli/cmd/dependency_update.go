@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -166,8 +167,15 @@ func runDependencyUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	updateSec := output.NewSection(w, "Update", updateElapsed, color)
-	updateSec.Row("%-16s%d", "applied", len(result.Applied))
-	updateSec.Row("%-16s%d", "skipped", len(result.Skipped))
+
+	appliedDeps := toOutputApplied(result.Applied)
+	output.SectionApplied(updateSec, "Applied", appliedDeps, color)
+
+	skippedGroups := aggregateSkipped(result.Skipped)
+	output.SectionSkipped(updateSec, "Skipped", skippedGroups, color)
+
+	cves := collectCVEsFixed(result.Applied)
+	output.SectionCVEs(updateSec, cves, color)
 
 	if result.Verified {
 		status := "success"
@@ -244,8 +252,16 @@ func runDryRun(ctx context.Context, w *os.File, color bool, cfg dependency.Updat
 
 	elapsed := time.Since(start)
 	sec := output.NewSection(w, "Dry Run", elapsed, color)
-	sec.Row("%-16s%d", "would update", len(candidates))
-	sec.Row("%-16s%d", "would skip", len(skipped))
+
+	appliedDeps := toOutputApplied(result.Applied)
+	output.SectionApplied(sec, "Would update", appliedDeps, color)
+
+	skippedGroups := aggregateSkipped(result.Skipped)
+	output.SectionSkipped(sec, "Would skip", skippedGroups, color)
+
+	cves := collectCVEsFixed(result.Applied)
+	output.SectionCVEs(sec, cves, color)
+
 	sec.Separator()
 
 	for _, a := range artifacts {
@@ -297,4 +313,87 @@ func gitTrackedFilesFromDir(ctx context.Context, repoRoot string) (map[string]bo
 		}
 	}
 	return tracked, nil
+}
+
+// toOutputApplied converts dependency.AppliedUpdate to output.AppliedDep.
+// Falls back to Dep.Vulnerabilities IDs when CVEsFixed is empty (dry-run path).
+func toOutputApplied(updates []dependency.AppliedUpdate) []output.AppliedDep {
+	out := make([]output.AppliedDep, len(updates))
+	for i, u := range updates {
+		cveIDs := u.CVEsFixed
+		if len(cveIDs) == 0 && len(u.Dep.Vulnerabilities) > 0 {
+			for _, v := range u.Dep.Vulnerabilities {
+				cveIDs = append(cveIDs, v.ID)
+			}
+		}
+		out[i] = output.AppliedDep{
+			Name:       u.Dep.Name,
+			OldVer:     u.OldVer,
+			NewVer:     u.NewVer,
+			UpdateType: u.UpdateType,
+			CVEsFixed:  cveIDs,
+		}
+	}
+	return out
+}
+
+// aggregateSkipped groups skipped deps by reason and returns sorted groups.
+func aggregateSkipped(skipped []dependency.SkippedDep) []output.SkippedGroup {
+	counts := make(map[string]int)
+	for _, s := range skipped {
+		counts[s.Reason]++
+	}
+	groups := make([]output.SkippedGroup, 0, len(counts))
+	for reason, count := range counts {
+		groups = append(groups, output.SkippedGroup{Reason: reason, Count: count})
+	}
+	return groups
+}
+
+// collectCVEsFixed deduplicates and sorts CVEs resolved by applied updates.
+func collectCVEsFixed(updates []dependency.AppliedUpdate) []output.CVEFixed {
+	seen := make(map[string]bool)
+	var cves []output.CVEFixed
+
+	for _, u := range updates {
+		for _, v := range u.Dep.Vulnerabilities {
+			if seen[v.ID] {
+				continue
+			}
+			seen[v.ID] = true
+			cves = append(cves, output.CVEFixed{
+				ID:       v.ID,
+				Severity: v.Severity,
+				Summary:  v.Summary,
+				FixedIn:  u.NewVer,
+				FixedBy:  u.Dep.Name,
+			})
+		}
+	}
+
+	sort.SliceStable(cves, func(i, j int) bool {
+		ri, rj := cveSeverityRank(cves[i].Severity), cveSeverityRank(cves[j].Severity)
+		if ri != rj {
+			return ri < rj
+		}
+		return cves[i].ID < cves[j].ID
+	})
+
+	return cves
+}
+
+// cveSeverityRank returns a sort rank (lower = more severe).
+func cveSeverityRank(severity string) int {
+	switch strings.ToUpper(strings.TrimSpace(severity)) {
+	case "CRITICAL":
+		return 0
+	case "HIGH":
+		return 1
+	case "MODERATE", "MEDIUM":
+		return 2
+	case "LOW":
+		return 3
+	default:
+		return 4
+	}
 }

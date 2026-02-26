@@ -14,6 +14,14 @@ type SecurityConfig struct {
 	// ReleaseDetailRules are conditional overrides evaluated top-down (first match wins).
 	// Uses the standard Condition primitive for tag/branch matching with ! negation.
 	ReleaseDetailRules []DetailRule `yaml:"release_detail_rules"`
+
+	// OverwhelmMessage is the message lines shown when >1000 vulns are found.
+	// Defaults to ["…maybe start here:"] with the OverwhelmLink below.
+	OverwhelmMessage []string `yaml:"overwhelm_message"`
+
+	// OverwhelmLink is an optional URL appended after OverwhelmMessage.
+	// Defaults to a Psychology Today anxiety page. Empty string disables.
+	OverwhelmLink string `yaml:"overwhelm_link"`
 }
 
 // DetailRule is a conditional override for security detail level in release notes.

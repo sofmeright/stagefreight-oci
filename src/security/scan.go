@@ -41,6 +41,8 @@ type ScanResult struct {
 	Status          string          // "passed", "warning", "critical"
 	Artifacts       []string        // paths to generated files (JSON, SARIF, SBOM)
 	Summary         string          // markdown summary for embedding in release notes
+	EngineVersion   string          // best-effort: from `trivy --version` or empty
+	OS              string          // "alpine 3.21.3" (from Trivy JSON Metadata.OS)
 }
 
 // Scan runs a Trivy vulnerability scan and optionally generates SBOMs.
@@ -53,6 +55,25 @@ func Scan(ctx context.Context, cfg ScanConfig) (*ScanResult, error) {
 
 	if cfg.OutputDir == "" {
 		cfg.OutputDir = "."
+	}
+
+	// Best-effort engine version (silent capture, no stdout/stderr connection).
+	if out, verErr := exec.Command("trivy", "--version").Output(); verErr == nil {
+		for _, ln := range strings.Split(string(out), "\n") {
+			ln = strings.TrimSpace(strings.TrimRight(ln, "\r"))
+			if ln == "" {
+				continue
+			}
+			// Find a semver-ish token (N.N.N) in the first non-empty line.
+			for _, tok := range strings.Fields(ln) {
+				t := strings.TrimPrefix(tok, "v")
+				if strings.Count(t, ".") >= 2 && len(t) >= 5 {
+					result.EngineVersion = "Trivy " + t
+					break
+				}
+			}
+			break
+		}
 	}
 
 	// Run Trivy JSON scan
@@ -264,20 +285,37 @@ func parseVulnerabilities(jsonPath string, result *ScanResult) error {
 
 	// Trivy JSON structure
 	var report struct {
+		Metadata struct {
+			OS struct {
+				Family string `json:"Family"`
+				Name   string `json:"Name"`
+			} `json:"OS"`
+		} `json:"Metadata"`
 		Results []struct {
 			Vulnerabilities []struct {
-				VulnerabilityID string `json:"VulnerabilityID"`
-				Severity        string `json:"Severity"`
-				PkgName         string `json:"PkgName"`
+				VulnerabilityID  string `json:"VulnerabilityID"`
+				Severity         string `json:"Severity"`
+				PkgName          string `json:"PkgName"`
 				InstalledVersion string `json:"InstalledVersion"`
-				FixedVersion    string `json:"FixedVersion"`
-				Title           string `json:"Title"`
-				Description     string `json:"Description"`
+				FixedVersion     string `json:"FixedVersion"`
+				Title            string `json:"Title"`
+				Description      string `json:"Description"`
 			} `json:"Vulnerabilities"`
 		} `json:"Results"`
 	}
 	if err := json.Unmarshal(data, &report); err != nil {
 		return err
+	}
+
+	// Extract OS metadata (best-effort).
+	family := strings.TrimSpace(report.Metadata.OS.Family)
+	name := strings.TrimSpace(report.Metadata.OS.Name)
+	if family != "" && name != "" {
+		result.OS = family + " " + name
+	} else if family != "" {
+		result.OS = family
+	} else if name != "" {
+		result.OS = name
 	}
 
 	for _, r := range report.Results {
