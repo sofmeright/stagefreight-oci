@@ -4,13 +4,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/sofmeright/stagefreight/src/badge"
 	"github.com/sofmeright/stagefreight/src/build"
 	"github.com/sofmeright/stagefreight/src/config"
 	"github.com/sofmeright/stagefreight/src/gitver"
+	"github.com/sofmeright/stagefreight/src/output"
 )
 
 var (
@@ -82,16 +85,26 @@ func buildBadgeEngine(defaults config.NarratorBadgeDefaults) (*badge.Engine, err
 	return badge.New(metrics), nil
 }
 
+// badgeRow holds display data for a single badge in section output.
+type badgeRow struct {
+	Name  string
+	Out   string
+	Font  string
+	Size  float64
+	Color string
+}
+
 func generateAdHocBadge(eng *badge.Engine) error {
-	color := bgColor
+	start := time.Now()
+	clr := bgColor
 	if bgStatus != "" {
-		color = badge.StatusColor(bgStatus)
+		clr = badge.StatusColor(bgStatus)
 	}
 
 	svg := eng.Generate(badge.Badge{
 		Label: bgLabel,
 		Value: bgValue,
-		Color: color,
+		Color: clr,
 	})
 
 	if err := os.MkdirAll(filepath.Dir(bgOutput), 0o755); err != nil {
@@ -100,11 +113,33 @@ func generateAdHocBadge(eng *badge.Engine) error {
 	if err := os.WriteFile(bgOutput, []byte(svg), 0o644); err != nil {
 		return fmt.Errorf("writing badge: %w", err)
 	}
-	fmt.Printf("  badge → %s\n", bgOutput)
+
+	elapsed := time.Since(start)
+	useColor := output.UseColor()
+	w := os.Stdout
+
+	// Derive font name/size from defaults for display
+	defaults := cfg.Git.Narrator.Badges
+	fontName := defaults.Font
+	if fontName == "" {
+		fontName = "dejavu-sans"
+	}
+	size := defaults.FontSize
+	if size == 0 {
+		size = 11
+	}
+
+	sec := output.NewSection(w, "Badges", elapsed, useColor)
+	sec.Row("%-16s%-24s %-8s %.0fpt  %s", bgLabel, bgOutput, fontName, size, clr)
+	sec.Separator()
+	sec.Row("1 generated")
+	sec.Close()
 	return nil
 }
 
 func generateConfigBadges(eng *badge.Engine, defaults config.NarratorBadgeDefaults, names []string) error {
+	start := time.Now()
+
 	// Collect all narrator items that have generation capability
 	var items []config.NarratorItem
 	for _, f := range cfg.Git.Narrator.Files {
@@ -169,6 +204,9 @@ func generateConfigBadges(eng *badge.Engine, defaults config.NarratorBadgeDefaul
 		}
 	}
 
+	var rows []badgeRow
+	generated := 0
+
 	for _, item := range items {
 		spec := item.ToBadgeSpec()
 
@@ -190,15 +228,15 @@ func generateConfigBadges(eng *badge.Engine, defaults config.NarratorBadgeDefaul
 		value = gitver.ResolveDockerTemplates(value, dockerInfo)
 
 		// Resolve color
-		color := spec.Color
-		if color == "" || color == "auto" {
-			color = badge.StatusColor(bgStatus)
+		badgeColor := spec.Color
+		if badgeColor == "" || badgeColor == "auto" {
+			badgeColor = badge.StatusColor(bgStatus)
 		}
 
 		svg := itemEng.Generate(badge.Badge{
 			Label: spec.Label,
 			Value: value,
-			Color: color,
+			Color: badgeColor,
 		})
 
 		if err := os.MkdirAll(filepath.Dir(spec.Output), 0o755); err != nil {
@@ -207,8 +245,51 @@ func generateConfigBadges(eng *badge.Engine, defaults config.NarratorBadgeDefaul
 		if err := os.WriteFile(spec.Output, []byte(svg), 0o644); err != nil {
 			return fmt.Errorf("writing badge %s: %w", item.Badge, err)
 		}
-		fmt.Printf("  badge %s → %s\n", item.Badge, spec.Output)
+		generated++
+
+		// Collect row for section output
+		fontName := spec.Font
+		if fontName == "" {
+			fontName = defaults.Font
+		}
+		if fontName == "" {
+			fontName = "dejavu-sans"
+		}
+		size := spec.FontSize
+		if size == 0 {
+			size = defaults.FontSize
+		}
+		if size == 0 {
+			size = 11
+		}
+		rows = append(rows, badgeRow{
+			Name:  item.Badge,
+			Out:   spec.Output,
+			Font:  fontName,
+			Size:  size,
+			Color: badgeColor,
+		})
 	}
+
+	// Sort rows for stable output
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Name != rows[j].Name {
+			return rows[i].Name < rows[j].Name
+		}
+		return rows[i].Out < rows[j].Out
+	})
+
+	elapsed := time.Since(start)
+	useColor := output.UseColor()
+	w := os.Stdout
+
+	sec := output.NewSection(w, "Badges", elapsed, useColor)
+	for _, r := range rows {
+		sec.Row("%-16s%-24s %-8s %.0fpt  %s", r.Name, r.Out, r.Font, r.Size, r.Color)
+	}
+	sec.Separator()
+	sec.Row("%d generated", generated)
+	sec.Close()
 
 	return nil
 }

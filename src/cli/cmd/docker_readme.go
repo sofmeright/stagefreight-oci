@@ -35,6 +35,7 @@ func init() {
 type readmeSyncResult struct {
 	Registry string
 	Status   string // "success" | "skipped" | "failed"
+	Detail   string
 	Err      error
 }
 
@@ -88,7 +89,7 @@ func runDockerReadme(cmd *cobra.Command, args []string) error {
 	sec := output.NewSection(w, "README Sync", elapsed, color)
 
 	for _, r := range results {
-		output.RowStatus(sec, r.Registry, "", r.Status, color)
+		output.RowStatus(sec, r.Registry, r.Detail, r.Status, color)
 	}
 
 	sec.Separator()
@@ -121,13 +122,13 @@ func syncReadmeCollect(ctx context.Context, readmeCfg config.DockerReadmeConfig,
 		case "dockerhub", "quay", "harbor":
 			// supported
 		default:
-			results = append(results, readmeSyncResult{Registry: name, Status: "skipped"})
+			results = append(results, readmeSyncResult{Registry: name, Status: "skipped", Detail: "no description API"})
 			continue
 		}
 
 		client, err := registry.NewRegistry(provider, reg.URL, reg.Credentials)
 		if err != nil {
-			results = append(results, readmeSyncResult{Registry: name, Status: "failed", Err: err})
+			results = append(results, readmeSyncResult{Registry: name, Status: "failed", Detail: err.Error(), Err: err})
 			fmt.Fprintf(os.Stderr, "readme: error %s: %v\n", name, err)
 			continue
 		}
@@ -139,7 +140,7 @@ func syncReadmeCollect(ctx context.Context, readmeCfg config.DockerReadmeConfig,
 		}
 
 		if err := client.UpdateDescription(ctx, reg.Path, short, content.Full); err != nil {
-			results = append(results, readmeSyncResult{Registry: name, Status: "failed", Err: err})
+			results = append(results, readmeSyncResult{Registry: name, Status: "failed", Detail: err.Error(), Err: err})
 			fmt.Fprintf(os.Stderr, "readme: error %s: %v\n", name, err)
 			continue
 		}
