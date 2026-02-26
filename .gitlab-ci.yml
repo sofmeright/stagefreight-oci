@@ -74,6 +74,7 @@ security-scan:
 generate-docs:
   stage: docs
   image: docker.jcr.pcfae.com/prplanit/stagefreight:latest-dev
+  needs: [build-image]
   variables:
     GIT_DEPTH: 0
     BUILD_STATUS: "passing"
