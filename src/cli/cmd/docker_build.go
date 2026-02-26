@@ -853,9 +853,9 @@ func runReadmeSyncSection(ctx context.Context, w io.Writer, _ bool, color bool, 
 
 	sec := output.NewSection(w, "Readme", elapsed, color)
 	for _, reg := range registries {
-		provider, _ := registry.CanonicalProvider(reg.Provider)
-		if provider == "" {
-			provider = "generic"
+		provider := "generic"
+		if p, err := registry.CanonicalProvider(reg.Provider); err == nil {
+			provider = p
 		}
 		switch provider {
 		case "docker", "github", "quay", "harbor":

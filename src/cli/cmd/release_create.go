@@ -212,7 +212,11 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 			if regProvider == "" {
 				regProvider = build.DetectProvider(reg.URL)
 			}
-			regProvider, _ = registry.CanonicalProvider(regProvider)
+			if p, err := registry.CanonicalProvider(regProvider); err == nil {
+				regProvider = p
+			} else {
+				regProvider = "generic"
+			}
 
 			link := buildRegistryLink(reg, tag, regProvider)
 			if linkedURLs[link.URL] {
