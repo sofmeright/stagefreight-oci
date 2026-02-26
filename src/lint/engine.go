@@ -63,17 +63,21 @@ func NewEngine(cfg config.LintConfig, rootDir string, moduleNames []string, skip
 				return nil, err
 			}
 
-			// Check if config explicitly disables this module
-			if mc, ok := cfg.Modules[name]; ok && mc.Enabled != nil && !*mc.Enabled {
-				continue
+			// Check config for explicit enable/disable override
+			mc, hasCfg := cfg.Modules[name]
+			if hasCfg && mc.Enabled != nil {
+				if !*mc.Enabled {
+					continue // explicitly disabled
+				}
+				// explicitly enabled — include regardless of DefaultEnabled
+			} else if !m.DefaultEnabled() {
+				continue // not configured and not default-enabled
 			}
 
-			if m.DefaultEnabled() {
-				if err := configureModule(m, cfg, name); err != nil {
-					return nil, err
-				}
-				modules = append(modules, m)
+			if err := configureModule(m, cfg, name); err != nil {
+				return nil, err
 			}
+			modules = append(modules, m)
 		}
 	}
 
