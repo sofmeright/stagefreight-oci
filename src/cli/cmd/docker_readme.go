@@ -110,16 +110,23 @@ func syncReadmeCollect(ctx context.Context, readmeCfg config.DockerReadmeConfig,
 	var results []readmeSyncResult
 
 	for _, reg := range registries {
+		name := reg.URL + "/" + reg.Path
+
 		provider := reg.Provider
 		if provider == "" {
 			provider = "generic"
+		} else {
+			var err error
+			provider, err = registry.CanonicalProvider(provider)
+			if err != nil {
+				results = append(results, readmeSyncResult{Registry: name, Status: "failed", Detail: err.Error()})
+				continue
+			}
 		}
 
-		name := reg.URL + "/" + reg.Path
-
-		// Only dockerhub, quay, harbor support description APIs
+		// Only docker, github, quay, harbor support description APIs
 		switch provider {
-		case "dockerhub", "quay", "harbor":
+		case "docker", "github", "quay", "harbor":
 			// supported
 		default:
 			results = append(results, readmeSyncResult{Registry: name, Status: "skipped", Detail: "no description API"})
@@ -159,11 +166,19 @@ func syncReadmeToRegistries(ctx context.Context, w io.Writer, readmeCfg config.D
 		provider := reg.Provider
 		if provider == "" {
 			provider = "generic"
+		} else {
+			var err error
+			provider, err = registry.CanonicalProvider(provider)
+			if err != nil {
+				fmt.Fprintf(w, "  readme: invalid provider %s/%s: %v\n", reg.URL, reg.Path, err)
+				errors++
+				continue
+			}
 		}
 
-		// Only dockerhub, quay, harbor support description APIs
+		// Only docker, github, quay, harbor support description APIs
 		switch provider {
-		case "dockerhub", "quay", "harbor":
+		case "docker", "github", "quay", "harbor":
 			// supported
 		default:
 			skipped++

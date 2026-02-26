@@ -72,6 +72,7 @@ docker:
     # Full rolling tag set. Renovate picks up {base} for auto-updates.
     # Only clean semver tags (no prerelease suffix).
     - url: docker.io
+      provider: docker
       path: prplanit/stagefreight
       tags:
         - "{version}"          # 0.2.0
@@ -84,6 +85,7 @@ docker:
     # ── Docker Hub: pre-releases (alpha/beta/rc) ────────────────────
     # Version tag only — no rolling tags, no latest.
     - url: docker.io
+      provider: docker
       path: prplanit/stagefreight
       tags:
         - "{version}"          # 0.2.0-alpha.1
@@ -94,6 +96,7 @@ docker:
     # Ephemeral builds for testing. No git tag required.
     # Retention keeps last 6 dev tags (sha-tagged only; latest-dev is excluded).
     - url: docker.io
+      provider: docker
       path: prplanit/stagefreight
       tags:
         - "dev-{sha:8}"               # dev-abc12345

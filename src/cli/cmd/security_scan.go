@@ -100,11 +100,11 @@ func runSecurityScan(cmd *cobra.Command, args []string) error {
 	detail := security.ResolveDetailLevel(cfg.Security, secScanDetail, cfg.Git.Policy)
 
 	// Build and write summary
-	summary := security.BuildSummary(result, detail)
+	_, summaryBody := security.BuildSummary(result, detail)
 	var summaryPath string
-	if summary != "" {
+	if summaryBody != "" {
 		summaryPath = scanCfg.OutputDir + "/summary.md"
-		if wErr := os.WriteFile(summaryPath, []byte(summary), 0o644); wErr != nil {
+		if wErr := os.WriteFile(summaryPath, []byte(summaryBody), 0o644); wErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not write summary: %v\n", wErr)
 			summaryPath = ""
 		} else {
@@ -181,9 +181,9 @@ func runSecurityScan(cmd *cobra.Command, args []string) error {
 	output.SectionEnd(w, "sf_security")
 
 	// Print verbose summary to stdout
-	if verbose && summary != "" {
+	if verbose && summaryBody != "" {
 		fmt.Println()
-		fmt.Print(summary)
+		fmt.Print(summaryBody)
 	}
 
 	// Fail if configured and critical vulns found

@@ -8,6 +8,9 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/sofmeright/stagefreight/src/build"
+	"github.com/sofmeright/stagefreight/src/gitver"
 )
 
 // CommitCategory represents a group of commits by type.
@@ -19,11 +22,12 @@ type CommitCategory struct {
 
 // Commit is a parsed conventional commit.
 type Commit struct {
-	Hash    string
-	Type    string // feat, fix, chore, etc.
-	Scope   string // optional scope in parens
-	Summary string
-	Body    string
+	Hash     string
+	Type     string // feat, fix, chore, etc.
+	Scope    string // optional scope in parens
+	Summary  string
+	Body     string
+	Author   string
 	Breaking bool
 }
 
@@ -49,26 +53,67 @@ var categoryOrder = []struct {
 	{"hotfix", "Hotfixes"},
 }
 
+// NotesInput holds all data needed to render release notes.
+type NotesInput struct {
+	RepoDir      string // git repository directory
+	FromRef      string // start ref (empty = auto-detect previous tag)
+	ToRef        string // end ref (default: HEAD)
+	SecurityTile string // one-line status (e.g., "🛡️ ✅ **Passed** — no vulnerabilities")
+	SecurityBody string // full section: status line + optional <details> CVE block
+	TagMessage   string // annotated tag message (optional, auto-detected if empty)
+	ProjectName  string // project name (auto-detected if empty)
+	Version      string // version string (auto-detected if empty)
+	SHA          string // short commit hash (auto-detected if empty)
+	IsPrerelease bool   // true if version has prerelease suffix
+}
+
 // GenerateNotes produces markdown release notes from git log between two refs.
-// If fromRef is empty, it finds the previous tag automatically.
-func GenerateNotes(repoDir, fromRef, toRef string, securitySummary string) (string, error) {
-	if toRef == "" {
-		toRef = "HEAD"
+func GenerateNotes(input NotesInput) (string, error) {
+	if input.ToRef == "" {
+		input.ToRef = "HEAD"
 	}
 
 	// Find previous tag if not specified
-	if fromRef == "" {
-		prev, err := previousTag(repoDir, toRef)
+	if input.FromRef == "" {
+		prev, err := previousTag(input.RepoDir, input.ToRef)
 		if err != nil || prev == "" {
-			// No previous tag — use all commits
-			fromRef = ""
+			input.FromRef = ""
 		} else {
-			fromRef = prev
+			input.FromRef = prev
 		}
 	}
 
+	// Auto-detect project metadata if not provided
+	if input.ProjectName == "" || input.Version == "" || input.SHA == "" {
+		if vi, err := build.DetectVersion(input.RepoDir); err == nil {
+			if input.Version == "" {
+				input.Version = vi.Version
+			}
+			if input.SHA == "" {
+				input.SHA = vi.SHA
+				if len(input.SHA) > 8 {
+					input.SHA = input.SHA[:8]
+				}
+			}
+			if !input.IsPrerelease {
+				input.IsPrerelease = vi.IsPrerelease
+			}
+		}
+		if input.ProjectName == "" {
+			pm := gitver.DetectProject(input.RepoDir)
+			if pm != nil {
+				input.ProjectName = pm.Name
+			}
+		}
+	}
+
+	// Auto-detect tag message
+	if input.TagMessage == "" {
+		input.TagMessage = tagMessage(input.RepoDir, input.ToRef)
+	}
+
 	// Get commits
-	commits, err := parseCommits(repoDir, fromRef, toRef)
+	commits, err := parseCommits(input.RepoDir, input.FromRef, input.ToRef)
 	if err != nil {
 		return "", err
 	}
@@ -76,8 +121,7 @@ func GenerateNotes(repoDir, fromRef, toRef string, securitySummary string) (stri
 	// Categorize
 	categories := categorize(commits)
 
-	// Render markdown
-	return renderNotes(categories, securitySummary), nil
+	return renderNotes(input, categories, commits), nil
 }
 
 func previousTag(repoDir, currentRef string) (string, error) {
@@ -90,6 +134,51 @@ func previousTag(repoDir, currentRef string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// tagMessage extracts the annotation message from an annotated tag.
+// Returns empty for lightweight tags or on error.
+func tagMessage(repoDir, ref string) string {
+	cmd := exec.Command("git", "for-each-ref", "refs/tags/"+ref, "--format=%(contents)")
+	cmd.Dir = repoDir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	msg := string(out)
+
+	// Strip PGP signature block
+	if idx := strings.Index(msg, "-----BEGIN PGP SIGNATURE-----"); idx >= 0 {
+		msg = msg[:idx]
+	}
+
+	return strings.TrimSpace(msg)
+}
+
+// bulletize converts a multi-line text into markdown bullets.
+// Lines already starting with "- " are kept as-is.
+func bulletize(text string) string {
+	lines := strings.Split(text, "\n")
+	var bullets []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "- ") {
+			line = "- " + line
+		}
+		bullets = append(bullets, line)
+	}
+	return strings.Join(bullets, "\n")
+}
+
+// releaseType returns a human-readable release type.
+func releaseType(isPrerelease bool) string {
+	if isPrerelease {
+		return "prerelease"
+	}
+	return "stable"
+}
+
 func parseCommits(repoDir, fromRef, toRef string) ([]Commit, error) {
 	var rangeSpec string
 	if fromRef != "" {
@@ -98,8 +187,8 @@ func parseCommits(repoDir, fromRef, toRef string) ([]Commit, error) {
 		rangeSpec = toRef
 	}
 
-	// Format: hash<SEP>subject<SEP>body
-	cmd := exec.Command("git", "log", rangeSpec, "--format=%H\x1f%s\x1f%b\x1e")
+	// Format: hash<SEP>subject<SEP>body<SEP>author
+	cmd := exec.Command("git", "log", rangeSpec, "--format=%H\x1f%s\x1f%b\x1f%aN\x1e")
 	cmd.Dir = repoDir
 	out, err := cmd.Output()
 	if err != nil {
@@ -114,7 +203,7 @@ func parseCommits(repoDir, fromRef, toRef string) ([]Commit, error) {
 			continue
 		}
 
-		fields := strings.SplitN(entry, "\x1f", 3)
+		fields := strings.SplitN(entry, "\x1f", 4)
 		if len(fields) < 2 {
 			continue
 		}
@@ -125,6 +214,9 @@ func parseCommits(repoDir, fromRef, toRef string) ([]Commit, error) {
 		}
 		if len(fields) > 2 {
 			c.Body = strings.TrimSpace(fields[2])
+		}
+		if len(fields) > 3 {
+			c.Author = strings.TrimSpace(fields[3])
 		}
 
 		// Parse conventional commit
@@ -192,26 +284,84 @@ func categorize(commits []Commit) []CommitCategory {
 	return categories
 }
 
-func renderNotes(categories []CommitCategory, securitySummary string) string {
+func renderNotes(input NotesInput, categories []CommitCategory, allCommits []Commit) string {
 	var b strings.Builder
 
-	for _, cat := range categories {
-		b.WriteString(fmt.Sprintf("### %s\n\n", cat.Title))
-		for _, c := range cat.Commits {
-			scope := ""
-			if c.Scope != "" {
-				scope = fmt.Sprintf("**%s**: ", c.Scope)
+	// 1. Hero header
+	version := input.Version
+	if version == "" {
+		version = "unreleased"
+	}
+	project := input.ProjectName
+	if project == "" {
+		project = "release"
+	}
+	b.WriteString(fmt.Sprintf("## 🌎 %s — `v%s`\n", project, version))
+
+	// Metadata line
+	var meta []string
+	meta = append(meta, fmt.Sprintf("**Release type:** %s", releaseType(input.IsPrerelease)))
+	if input.SHA != "" {
+		meta = append(meta, fmt.Sprintf("**Commit:** `%s`", input.SHA))
+	}
+	b.WriteString(fmt.Sprintf("> %s\n\n", strings.Join(meta, " • ")))
+
+	// 2. Security tile (compact status in hero area)
+	if input.SecurityTile != "" {
+		b.WriteString(fmt.Sprintf("**Security:** %s\n\n", input.SecurityTile))
+	}
+
+	// 3. Highlights (tag message)
+	if input.TagMessage != "" {
+		b.WriteString("## Highlights\n")
+		b.WriteString(bulletize(input.TagMessage))
+		b.WriteString("\n\n")
+	}
+
+	// 4. Notable Changes (H2 wrapper, H4 categories)
+	if len(categories) > 0 {
+		b.WriteString("## Notable Changes\n\n")
+		for _, cat := range categories {
+			b.WriteString(fmt.Sprintf("#### %s\n", cat.Title))
+			for _, c := range cat.Commits {
+				scope := ""
+				if c.Scope != "" {
+					scope = fmt.Sprintf("**%s**: ", c.Scope)
+				}
+				author := ""
+				if c.Author != "" {
+					author = fmt.Sprintf(" (%s)", c.Author)
+				}
+				b.WriteString(fmt.Sprintf("- %s%s%s\n", scope, c.Summary, author))
 			}
-			b.WriteString(fmt.Sprintf("- %s%s (%s)\n", scope, c.Summary, c.Hash))
+			b.WriteString("\n")
 		}
+	}
+
+	// 5. Security section
+	if input.SecurityBody != "" {
+		b.WriteString("## Security\n\n")
+		b.WriteString(input.SecurityBody)
 		b.WriteString("\n")
 	}
 
-	// Embed security summary if provided
-	if securitySummary != "" {
-		b.WriteString(securitySummary)
-		b.WriteString("\n")
+	// 6. Horizontal rule
+	b.WriteString("---\n\n")
+
+	// 7. Full changelog (always present, collapsible)
+	b.WriteString("<details>\n<summary>Full changelog</summary>\n\n")
+	if len(allCommits) == 0 {
+		b.WriteString("No changes found.\n")
+	} else {
+		for _, c := range allCommits {
+			author := ""
+			if c.Author != "" {
+				author = fmt.Sprintf(" (%s)", c.Author)
+			}
+			b.WriteString(fmt.Sprintf("- [`%s`] %s%s\n", c.Hash, c.Summary, author))
+		}
 	}
+	b.WriteString("\n</details>\n")
 
 	return b.String()
 }

@@ -124,57 +124,101 @@ func Scan(ctx context.Context, cfg ScanConfig) (*ScanResult, error) {
 }
 
 // BuildSummary generates a markdown summary at the specified detail level.
+// Returns (tile, body):
+//   - tile: single-line status for hero area (e.g., "🛡️ ✅ **Passed** — no critical or high vulnerabilities")
+//   - body: full section content (status line + optional <details> block with CVE data)
+//
 // Detail levels: "none", "counts", "detailed", "full".
-func BuildSummary(result *ScanResult, detail string) string {
+func BuildSummary(result *ScanResult, detail string) (tile, body string) {
 	if result.Status == "skipped" || detail == "none" {
-		return ""
+		return "", ""
 	}
+
+	tile = buildStatusTile(result)
 
 	switch detail {
 	case "full":
-		return buildFullSummary(result)
+		body = buildFullBody(result, tile)
 	case "detailed":
-		return buildDetailedSummary(result)
+		body = buildDetailedBody(result, tile)
 	default: // "counts" or unrecognized
-		return buildCountsSummary(result)
+		body = tile + "\n"
+	}
+	return tile, body
+}
+
+// buildStatusTile produces the one-line security status.
+func buildStatusTile(result *ScanResult) string {
+	return fmt.Sprintf("🛡️ %s — %s", statusEmoji(result.Status), statusDetail(result))
+}
+
+func statusEmoji(status string) string {
+	switch status {
+	case "passed":
+		return "✅ **Passed**"
+	case "warning":
+		return "⚠️ **Warning**"
+	case "critical":
+		return "❌ **Critical**"
+	case "skipped":
+		return "⏭️ **Skipped**"
+	default:
+		return status
 	}
 }
 
-func buildCountsSummary(result *ScanResult) string {
+func statusDetail(result *ScanResult) string {
+	total := result.Critical + result.High + result.Medium + result.Low
+	if total == 0 {
+		return "no vulnerabilities found"
+	}
+	switch {
+	case result.Critical > 0 && result.High > 0:
+		return fmt.Sprintf("%d critical and %d high vulnerabilities detected", result.Critical, result.High)
+	case result.Critical > 0:
+		return fmt.Sprintf("%d critical vulnerabilities detected", result.Critical)
+	case result.High > 0:
+		return fmt.Sprintf("%d high vulnerabilities detected", result.High)
+	default:
+		return fmt.Sprintf("%d vulnerabilities (%d medium, %d low)", total, result.Medium, result.Low)
+	}
+}
+
+// vulnCountsSuffix builds a compact counts string for <summary> tags.
+// Only includes non-zero severities.
+func vulnCountsSuffix(result *ScanResult) string {
+	var parts []string
+	if result.Critical > 0 {
+		parts = append(parts, fmt.Sprintf("%d critical", result.Critical))
+	}
+	if result.High > 0 {
+		parts = append(parts, fmt.Sprintf("%d high", result.High))
+	}
+	if result.Medium > 0 {
+		parts = append(parts, fmt.Sprintf("%d medium", result.Medium))
+	}
+	if result.Low > 0 {
+		parts = append(parts, fmt.Sprintf("%d low", result.Low))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "(" + strings.Join(parts, ", ") + ")"
+}
+
+func buildDetailedBody(result *ScanResult, tile string) string {
 	var b strings.Builder
-	b.WriteString("### Security Scan\n\n")
+	b.WriteString(tile)
+	b.WriteString("\n")
 
 	total := result.Critical + result.High + result.Medium + result.Low
 	if total == 0 {
-		b.WriteString("No vulnerabilities found.\n")
 		return b.String()
 	}
 
-	b.WriteString("| Severity | Count |\n|---|---|\n")
-	if result.Critical > 0 {
-		b.WriteString(fmt.Sprintf("| **Critical** | **%d** |\n", result.Critical))
-	}
-	if result.High > 0 {
-		b.WriteString(fmt.Sprintf("| High | %d |\n", result.High))
-	}
-	if result.Medium > 0 {
-		b.WriteString(fmt.Sprintf("| Medium | %d |\n", result.Medium))
-	}
-	if result.Low > 0 {
-		b.WriteString(fmt.Sprintf("| Low | %d |\n", result.Low))
-	}
-	b.WriteString(fmt.Sprintf("\nTotal: %d vulnerabilities\n", total))
+	// Collapsible CVE lists for critical and high
+	b.WriteString(fmt.Sprintf("\n<details>\n<summary>Vulnerability details %s</summary>\n", vulnCountsSuffix(result)))
 
-	return b.String()
-}
-
-func buildDetailedSummary(result *ScanResult) string {
-	var b strings.Builder
-
-	// Start with counts table
-	b.WriteString(buildCountsSummary(result))
-
-	// Add per-severity CVE lists for critical and high
 	maxPerSeverity := 5
 	for _, sev := range []string{"CRITICAL", "HIGH"} {
 		vulns := filterBySeverity(result.Vulnerabilities, sev)
@@ -194,28 +238,30 @@ func buildDetailedSummary(result *ScanResult) string {
 			if len(desc) > 80 {
 				desc = desc[:77] + "..."
 			}
-			b.WriteString(fmt.Sprintf("- **%s** — %s\n", v.ID, desc))
+			b.WriteString(fmt.Sprintf("- **%s** — %s (%s)\n", v.ID, desc, v.Package))
 			shown++
 		}
 	}
 
+	b.WriteString("\n</details>\n")
 	return b.String()
 }
 
-func buildFullSummary(result *ScanResult) string {
+func buildFullBody(result *ScanResult, tile string) string {
 	var b strings.Builder
-	b.WriteString("### Security Scan\n\n")
+	b.WriteString(tile)
+	b.WriteString("\n")
 
 	total := result.Critical + result.High + result.Medium + result.Low
 	if total == 0 {
-		b.WriteString("No vulnerabilities found.\n")
 		return b.String()
 	}
+
+	b.WriteString(fmt.Sprintf("\n<details>\n<summary>Vulnerability details %s</summary>\n\n", vulnCountsSuffix(result)))
 
 	b.WriteString("| Severity | CVE | Package | Installed | Fixed | Description |\n")
 	b.WriteString("|---|---|---|---|---|---|\n")
 
-	// Sort order: critical first, then high, medium, low
 	for _, sev := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW"} {
 		vulns := filterBySeverity(result.Vulnerabilities, sev)
 		for _, v := range vulns {
@@ -236,7 +282,7 @@ func buildFullSummary(result *ScanResult) string {
 		}
 	}
 
-	b.WriteString(fmt.Sprintf("\nTotal: %d vulnerabilities\n", total))
+	b.WriteString("\n</details>\n")
 	return b.String()
 }
 

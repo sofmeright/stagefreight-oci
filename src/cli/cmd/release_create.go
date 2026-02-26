@@ -13,6 +13,7 @@ import (
 	"github.com/sofmeright/stagefreight/src/forge"
 	"github.com/sofmeright/stagefreight/src/gitver"
 	"github.com/sofmeright/stagefreight/src/output"
+	"github.com/sofmeright/stagefreight/src/registry"
 	"github.com/sofmeright/stagefreight/src/release"
 	"github.com/sofmeright/stagefreight/src/retention"
 )
@@ -98,7 +99,7 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load security summary if provided
-	var secSummary string
+	var secTile, secBody string
 	if rcSecuritySummary != "" {
 		summaryPath := rcSecuritySummary + "/summary.md"
 		data, err := os.ReadFile(summaryPath)
@@ -108,7 +109,12 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 				fmt.Fprintf(os.Stderr, "note: no security summary at %s: %v\n", summaryPath, err)
 			}
 		} else {
-			secSummary = string(data)
+			content := strings.TrimSpace(string(data))
+			if content != "" {
+				parts := strings.SplitN(content, "\n", 2)
+				secTile = strings.TrimSpace(parts[0])
+				secBody = content
+			}
 		}
 	}
 
@@ -121,7 +127,20 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 		}
 		notes = string(data)
 	} else {
-		notes, err = release.GenerateNotes(rootDir, "", tag, secSummary)
+		sha := versionInfo.SHA
+		if len(sha) > 8 {
+			sha = sha[:8]
+		}
+		input := release.NotesInput{
+			RepoDir:      rootDir,
+			ToRef:        tag,
+			SecurityTile: secTile,
+			SecurityBody: secBody,
+			Version:      versionInfo.Version,
+			SHA:          sha,
+			IsPrerelease: versionInfo.IsPrerelease,
+		}
+		notes, err = release.GenerateNotes(input)
 		if err != nil {
 			return fmt.Errorf("generating notes: %w", err)
 		}
@@ -193,6 +212,7 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 			if regProvider == "" {
 				regProvider = build.DetectProvider(reg.URL)
 			}
+			regProvider, _ = registry.CanonicalProvider(regProvider)
 
 			link := buildRegistryLink(reg, tag, regProvider)
 			if linkedURLs[link.URL] {
@@ -449,10 +469,10 @@ func buildRegistryLink(reg config.RegistryConfig, tag string, provider string) f
 
 	var webURL string
 	switch provider {
-	case "dockerhub":
+	case "docker":
 		// Docker Hub web URL: hub.docker.com/r/org/repo/tags
 		webURL = fmt.Sprintf("https://hub.docker.com/r/%s/tags?name=%s", reg.Path, tag)
-	case "ghcr":
+	case "github":
 		// GitHub Container Registry: ghcr.io/org/repo
 		webURL = fmt.Sprintf("https://github.com/%s/pkgs/container/%s", ownerFromPath(reg.Path), repoFromPath(reg.Path))
 	case "quay":
@@ -475,9 +495,9 @@ func buildRegistryLink(reg config.RegistryConfig, tag string, provider string) f
 // vendorDisplayName returns a human-friendly name for a registry provider.
 func vendorDisplayName(provider string) string {
 	switch provider {
-	case "dockerhub":
+	case "docker":
 		return "Docker Hub"
-	case "ghcr":
+	case "github":
 		return "GitHub Container Registry"
 	case "quay":
 		return "Quay.io"

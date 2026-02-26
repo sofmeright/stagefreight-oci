@@ -21,11 +21,13 @@ var (
 	envPrefixRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 )
 
-// Known provider values.
+// Known provider values (canonical + aliases).
 var knownProviders = map[string]bool{
 	"local":     true, // local Docker daemon
-	"dockerhub": true,
-	"ghcr":      true,
+	"docker":    true, // canonical
+	"dockerhub": true, // alias → docker
+	"github":    true, // canonical
+	"ghcr":      true, // alias → github
 	"gitlab":    true,
 	"quay":      true,
 	"jfrog":     true,
@@ -161,12 +163,20 @@ func ValidateCredentials(prefix string) error {
 	return nil
 }
 
-// ValidateProvider checks that the provider is a known value.
+// ValidateProvider normalizes and checks that the provider is a known value.
 func ValidateProvider(provider string) error {
-	if !knownProviders[provider] {
-		return fmt.Errorf("unknown provider %q (known: dockerhub, ghcr, gitlab, quay, jfrog, harbor, gitea, generic)", provider)
+	_, err := CanonicalProvider(provider)
+	return err
+}
+
+// CanonicalProvider normalizes a provider string to its canonical form and
+// validates it. Returns the canonical name or an error for unknown values.
+func CanonicalProvider(provider string) (string, error) {
+	canonical := NormalizeProvider(provider)
+	if !knownProviders[canonical] {
+		return "", fmt.Errorf("unknown provider %q (valid: docker, github, gitlab, quay, jfrog, harbor, gitea, local, generic)", provider)
 	}
-	return nil
+	return canonical, nil
 }
 
 // ValidateRetention checks that all retention policy values are non-negative.

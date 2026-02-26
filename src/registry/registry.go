@@ -36,24 +36,40 @@ type TagInfo struct {
 	CreatedAt time.Time
 }
 
+// NormalizeProvider maps provider aliases to their canonical platform names.
+// Canonical names are the platform brand: docker, github, gitlab, quay, jfrog, harbor, gitea.
+// Legacy aliases (dockerhub, ghcr) are accepted and mapped to canonical forms.
+func NormalizeProvider(p string) string {
+	p = strings.ToLower(strings.TrimSpace(p))
+	switch p {
+	case "dockerhub":
+		return "docker"
+	case "ghcr":
+		return "github"
+	default:
+		return p
+	}
+}
+
 // NewRegistry creates a registry client for the given provider.
 // Credentials are resolved from environment variables using the prefix:
 //
-//	prefix: "DOCKERHUB" → DOCKERHUB_USER / DOCKERHUB_PASS
-//	prefix: "GHCR_ORG"  → GHCR_ORG_USER / GHCR_ORG_PASS
+//	prefix: "DOCKER" → DOCKER_USER / DOCKER_PASS
+//	prefix: "GHCR_ORG" → GHCR_ORG_USER / GHCR_ORG_PASS
 //
 // The registryURL is the base URL (e.g., "docker.io", "ghcr.io").
 func NewRegistry(provider, registryURL, credentialPrefix string) (Registry, error) {
+	provider = NormalizeProvider(provider)
 	user, pass := resolveCredentials(credentialPrefix)
 
 	switch provider {
 	case "local":
 		return NewLocal(), nil
-	case "dockerhub":
+	case "docker":
 		return NewDockerHub(user, pass), nil
 	case "gitlab":
 		return NewGitLab(registryURL, user, pass), nil
-	case "ghcr":
+	case "github":
 		return NewGHCR(user, pass), nil
 	case "quay":
 		return NewQuay(registryURL, user, pass), nil
@@ -64,7 +80,7 @@ func NewRegistry(provider, registryURL, credentialPrefix string) (Registry, erro
 	case "gitea":
 		return NewGitea(registryURL, user, pass), nil
 	default:
-		return nil, fmt.Errorf("registry: unsupported provider %q (supported: local, dockerhub, gitlab, ghcr, quay, jfrog, harbor, gitea)", provider)
+		return nil, fmt.Errorf("registry: unsupported provider %q (valid: docker, github, gitlab, quay, jfrog, harbor, gitea)", provider)
 	}
 }
 

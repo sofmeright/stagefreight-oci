@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/sofmeright/stagefreight/src/release"
@@ -46,17 +47,28 @@ func runReleaseNotes(cmd *cobra.Command, args []string) error {
 		rootDir = args[0]
 	}
 
+	input := release.NotesInput{
+		RepoDir: rootDir,
+		FromRef: rnFrom,
+		ToRef:   rnTo,
+	}
+
 	// Load security summary from file if provided
-	var secSummary string
 	if rnSecuritySummary != "" {
 		data, err := os.ReadFile(rnSecuritySummary)
 		if err != nil {
 			return fmt.Errorf("reading security summary: %w", err)
 		}
-		secSummary = string(data)
+		content := strings.TrimSpace(string(data))
+		if content != "" {
+			// First line is the tile, full content is the body
+			parts := strings.SplitN(content, "\n", 2)
+			input.SecurityTile = strings.TrimSpace(parts[0])
+			input.SecurityBody = content
+		}
 	}
 
-	notes, err := release.GenerateNotes(rootDir, rnFrom, rnTo, secSummary)
+	notes, err := release.GenerateNotes(input)
 	if err != nil {
 		return fmt.Errorf("generating notes: %w", err)
 	}
