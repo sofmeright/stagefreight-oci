@@ -1,5 +1,5 @@
 # ---- Go build stage ----
-FROM docker.io/library/golang:1.25-alpine AS builder
+FROM docker.io/library/golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git chafa
 
@@ -24,7 +24,7 @@ RUN CGO_ENABLED=0 go build -tags banner_art \
       -o /out/stagefreight ./src/cli
 
 # ---- Runtime image ----
-FROM docker.io/library/alpine:3.22.1
+FROM docker.io/library/alpine:3.23.3
 
 LABEL maintainer="SoFMeRight <sofmeright@gmail.com>" \
       org.opencontainers.image.title="StageFreight" \
