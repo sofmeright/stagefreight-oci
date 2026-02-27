@@ -1,114 +1,174 @@
+version: 1
+
+vars:
+  org: prplanit
+  repo: stagefreight
+
 sources:
   primary:
     kind: git
     worktree: "."
-    url: "https://github.com/sofmeright/stagefreight"
+    url: "https://github.com/{var:org}/{var:repo}"
     default_branch: "main"
 
-git:
-  policy:
+policies:
+  git_tags:
+    stable: "^\\d+\\.\\d+\\.\\d+$"
+    prerelease: "^\\d+\\.\\d+\\.\\d+-.+"
+  branches:
+    main: "^main$"
+
+builds:
+  - id: stagefreight
+    kind: docker
+    platforms: [linux/amd64]
+
+targets:
+  # ── Docker Hub: stable releases ─────────────────────────────────
+  # Full rolling tag set. Renovate picks up {base} for auto-updates.
+  # Only clean semver tags (no prerelease suffix).
+  - id: dockerhub-stable
+    kind: registry
+    build: stagefreight
+    url: docker.io
+    provider: docker
+    path: "{var:org}/{var:repo}"
     tags:
-      stable: "^\\d+\\.\\d+\\.\\d+$"
-      prerelease: "^\\d+\\.\\d+\\.\\d+-.+"
-    branches:
-      main: "^main$"
-  narrator:
-    link_base: "https://github.com/sofmeright/stagefreight/blob/main"
-    badges:
-      font: dejavu-sans
-      font_size: 11
-    files:
-      - id: readme
-        path: "README.md"
-        sections:
-          - id: readme.badges
-            name: badges
-            inline: true
-            items:
-              - id: badge.release
-                badge: release
-                color: "#74ecbe"
-                output: ".stagefreight/badges/release.svg"
-                link: "https://github.com/sofmeright/stagefreight/releases"
-              - id: badge.build
-                badge: build
-                value: "{env:BUILD_STATUS}"
-                color: auto
-                font: monofur
-                output: ".stagefreight/badges/build.svg"
-                link: "https://github.com/sofmeright/stagefreight/actions"
-              - id: badge.license
-                badge: license
-                value: "AGPL-3.0+"
-                color: "#310937"
-                font: monofur
-                output: ".stagefreight/badges/license.svg"
-                link: LICENSE
-              - id: badge.updated
-                badge: updated
-                value: "{env:BUILD_DATE}"
-                color: "#236144"
-                output: ".stagefreight/badges/updated.svg"
-              - id: shield.pulls
-                shield: docker/pulls/prplanit/stagefreight
-                link: "https://hub.docker.com/r/prplanit/stagefreight"
-      - id: component-docs
-        path: "docs/Component.md"
-        sections:
-          - id: component-docs.inputs
-            name: component
-            items:
-              - component: "templates/stagefreight.yml"
+      - "{version}"          # 0.2.0
+      - "{major}.{minor}"    # 0.2
+      - "{major}"            # 0
+      - "latest"
+    when: { git_tags: [stable], events: [tag] }
+    credentials: DOCKER
 
-docker:
-  readme:
-    description: "Declarative CI/CD CLI — detect, build, scan, and release container images from one manifest"
+  # ── Docker Hub: pre-releases (alpha/beta/rc) ────────────────────
+  # Version tag only — no rolling tags, no latest.
+  - id: dockerhub-prerelease
+    kind: registry
+    build: stagefreight
+    url: docker.io
+    provider: docker
+    path: "{var:org}/{var:repo}"
+    tags:
+      - "{version}"          # 0.2.0-alpha.1
+    when: { git_tags: [prerelease], events: [tag] }
+    credentials: DOCKER
+
+  # ── Docker Hub: dev builds on every commit ───────────────────────
+  # Ephemeral builds for testing. No git tag required.
+  # Retention keeps last 6 dev tags (sha-tagged only; latest-dev is protected).
+  - id: dockerhub-dev
+    kind: registry
+    build: stagefreight
+    url: docker.io
+    provider: docker
+    path: "{var:org}/{var:repo}"
+    tags:
+      - "dev-{sha:8}"        # dev-abc12345
+      - "latest-dev"          # always points to newest dev build
+    when: { branches: [main], events: [push] }
+    credentials: DOCKER
+    retention:
+      keep_last: 6
+      protect: ["latest-dev"]
+
+  # ── Docker Hub: README sync ──────────────────────────────────────
+  - id: dockerhub-readme
+    kind: docker-readme
+    url: docker.io
+    path: "{var:org}/{var:repo}"
+    credentials: DOCKER
+    when: { branches: [main], events: [push, tag] }
     file: "README.md"
+    description: "Declarative CI/CD CLI — detect, build, scan, and release container images from one manifest"
+    link_base: "https://github.com/{var:org}/{var:repo}/blob/main"
 
-  platforms: [linux/amd64]
+  # ── GitLab component catalog ─────────────────────────────────────
+  - id: gitlab-catalog
+    kind: gitlab-component
+    when: { branches: [main], events: [push] }
+    spec_files: ["templates/stagefreight.yml"]
+    catalog: true
 
-  registries:
-    # ── Docker Hub: stable releases ─────────────────────────────────
-    # Full rolling tag set. Renovate picks up {base} for auto-updates.
-    # Only clean semver tags (no prerelease suffix).
-    - url: docker.io
-      provider: docker
-      path: prplanit/stagefreight
-      tags:
-        - "{version}"          # 0.2.0
-        - "{major}.{minor}"    # 0.2
-        - "{major}"            # 0
-        - "latest"
-      git_tags: [stable]
-      credentials: DOCKER
+  # ── Primary release (rolling git tag aliases) ────────────────────
+  - id: primary-release
+    kind: release
+    aliases: ["{version}", "{major}.{minor}", "latest"]
+    when: { git_tags: [stable], events: [tag] }
 
-    # ── Docker Hub: pre-releases (alpha/beta/rc) ────────────────────
-    # Version tag only — no rolling tags, no latest.
-    - url: docker.io
-      provider: docker
-      path: prplanit/stagefreight
-      tags:
-        - "{version}"          # 0.2.0-alpha.1
-      git_tags: [prerelease]
-      credentials: DOCKER
+narrator:
+  - file: "README.md"
+    link_base: "https://github.com/{var:org}/{var:repo}/blob/main"
+    items:
+      - id: badge.release
+        kind: badge
+        placement:
+          between: ["<!-- sf:badges:start -->", "<!-- sf:badges:end -->"]
+          mode: replace
+          inline: true
+        text: release
+        color: "#74ecbe"
+        font: dejavu-sans
+        font_size: 11
+        output: ".stagefreight/badges/release.svg"
+        link: "https://github.com/{var:org}/{var:repo}/releases"
 
-    # ── Docker Hub: dev builds on every commit ───────────────────────
-    # Ephemeral builds for testing. No git tag required.
-    # Retention keeps last 6 dev tags (sha-tagged only; latest-dev is excluded).
-    - url: docker.io
-      provider: docker
-      path: prplanit/stagefreight
-      tags:
-        - "dev-{sha:8}"               # dev-abc12345
-        - "latest-dev"                 # always points to newest dev build
-      branches: [main]
-      credentials: DOCKER
-      retention: 6
+      - id: badge.build
+        kind: badge
+        placement:
+          between: ["<!-- sf:badges:start -->", "<!-- sf:badges:end -->"]
+          mode: replace
+          inline: true
+        text: build
+        value: "{env:BUILD_STATUS}"
+        color: auto
+        font: monofur
+        output: ".stagefreight/badges/build.svg"
+        link: "https://github.com/{var:org}/{var:repo}/actions"
 
-gitlab_component:
-  spec_files:
-    - "templates/stagefreight.yml"
-  catalog: true
+      - id: badge.license
+        kind: badge
+        placement:
+          between: ["<!-- sf:badges:start -->", "<!-- sf:badges:end -->"]
+          mode: replace
+          inline: true
+        text: license
+        value: "AGPL-3.0+"
+        color: "#310937"
+        font: monofur
+        output: ".stagefreight/badges/license.svg"
+        link: LICENSE
+
+      - id: badge.updated
+        kind: badge
+        placement:
+          between: ["<!-- sf:badges:start -->", "<!-- sf:badges:end -->"]
+          mode: replace
+          inline: true
+        text: updated
+        value: "{env:BUILD_DATE}"
+        color: "#236144"
+        font: dejavu-sans
+        font_size: 11
+        output: ".stagefreight/badges/updated.svg"
+
+      - id: shield.pulls
+        kind: shield
+        placement:
+          between: ["<!-- sf:badges:start -->", "<!-- sf:badges:end -->"]
+          mode: replace
+          inline: true
+        shield: "docker/pulls/{var:org}/{var:repo}"
+        link: "https://hub.docker.com/r/{var:org}/{var:repo}"
+
+  - file: "docs/Component.md"
+    items:
+      - id: component-docs
+        kind: component
+        placement:
+          between: ["<!-- sf:component:start -->", "<!-- sf:component:end -->"]
+          mode: replace
+        spec: "templates/stagefreight.yml"
 
 lint:
   level: full
@@ -147,3 +207,7 @@ lint:
         detect_bidi: true
         detect_zero_width: true
         detect_control_ascii: true
+
+security:
+  enabled: true
+  sbom: true
