@@ -3,8 +3,6 @@ package dependency
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"sort"
 	"strings"
 )
@@ -33,7 +31,7 @@ func Verify(ctx context.Context, moduleDirs []string, repoRoot string, runTests,
 	sort.Strings(dirs)
 
 	var runGo goRunner
-	if runTests {
+	if runTests || runVulncheck {
 		var err error
 		runGo, err = resolveGoRunner(repoRoot)
 		if err != nil {
@@ -53,7 +51,7 @@ func Verify(ctx context.Context, moduleDirs []string, repoRoot string, runTests,
 		}
 
 		if runVulncheck {
-			vulnLog, err := runGovulncheck(ctx, dir)
+			vulnLog, err := runGovulncheck(ctx, dir, runGo)
 			if vulnLog != "" {
 				log.WriteString(fmt.Sprintf("=== govulncheck ./... (%s) ===\n", dir))
 				log.WriteString(vulnLog)
@@ -73,15 +71,9 @@ func runGoTest(ctx context.Context, dir string, runGo goRunner) (string, error) 
 	return string(out), err
 }
 
-func runGovulncheck(ctx context.Context, dir string) (string, error) {
-	// Check if govulncheck is on PATH
-	if _, err := exec.LookPath("govulncheck"); err != nil {
-		return "", nil // not available, skip silently
-	}
+const govulncheckModule = "golang.org/x/vuln/cmd/govulncheck@latest"
 
-	cmd := exec.CommandContext(ctx, "govulncheck", "./...")
-	cmd.Dir = dir
-	cmd.Env = os.Environ()
-	out, err := cmd.CombinedOutput()
+func runGovulncheck(ctx context.Context, dir string, runGo goRunner) (string, error) {
+	out, err := runGo(ctx, dir, "run", govulncheckModule, "./...")
 	return string(out), err
 }

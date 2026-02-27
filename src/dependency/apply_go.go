@@ -28,7 +28,14 @@ func resolveGoRunner(repoRoot string) (goRunner, error) {
 	}
 	// Strategy 3: Container runtime (docker/podman/nerdctl)
 	if rt := detectContainerRuntime(); rt != "" {
-		return containerGoRunner(rt, repoRoot), nil
+		absRoot, err := filepath.Abs(repoRoot)
+		if err != nil {
+			return nil, fmt.Errorf("resolving repo root: %w", err)
+		}
+		if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
+			absRoot = resolved
+		}
+		return containerGoRunner(rt, absRoot), nil
 	}
 	// Strategy 4: Error
 	return nil, fmt.Errorf("go toolchain not found: install Go, set STAGEFREIGHT_GO_HOME, or ensure a container runtime (docker/podman/nerdctl) is available")
@@ -72,7 +79,7 @@ func detectContainerRuntime() string {
 	return ""
 }
 
-func containerGoRunner(runtime, repoRoot string) goRunner {
+func containerGoRunner(rt, repoRoot string) goRunner {
 	return func(ctx context.Context, dir string, args ...string) ([]byte, error) {
 		ver := parseGoVersion(dir, repoRoot)
 		image := fmt.Sprintf("docker.io/library/golang:%s-alpine", ver)
@@ -86,9 +93,25 @@ func containerGoRunner(runtime, repoRoot string) goRunner {
 			workDir = "/src/" + filepath.ToSlash(relDir)
 		}
 
-		runArgs := []string{"run", "--rm", "-v", repoRoot + ":/src", "-w", workDir}
-		// Pass through Go module-relevant environment variables
-		for _, key := range []string{"GOPROXY", "GONOSUMDB", "GOPRIVATE", "GONOSUMCHECK", "GONOPROXY", "GOFLAGS"} {
+		runArgs := []string{"run", "--rm", "--pull=missing", "-v", repoRoot + ":/src", "-w", workDir}
+
+		// Run as current user to avoid root-owned writes on shared volumes
+		if uid := os.Getuid(); uid >= 0 {
+			runArgs = append(runArgs, "--user", fmt.Sprintf("%d:%d", uid, os.Getgid()))
+		}
+
+		// Set HOME and Go caches inside the container
+		runArgs = append(runArgs,
+			"-e", "HOME=/tmp",
+			"-e", "GOCACHE=/tmp/gocache",
+			"-e", "GOMODCACHE=/tmp/gomodcache",
+		)
+
+		// Pass through Go module-relevant and proxy environment variables
+		for _, key := range []string{
+			"GOPROXY", "GONOSUMDB", "GOPRIVATE", "GONOPROXY", "GOFLAGS",
+			"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+		} {
 			if val, ok := os.LookupEnv(key); ok {
 				runArgs = append(runArgs, "-e", key+"="+val)
 			}
@@ -97,8 +120,12 @@ func containerGoRunner(runtime, repoRoot string) goRunner {
 		runArgs = append(runArgs, image, "go")
 		runArgs = append(runArgs, args...)
 
-		cmd := exec.CommandContext(ctx, runtime, runArgs...)
-		return cmd.CombinedOutput()
+		cmd := exec.CommandContext(ctx, rt, runArgs...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return out, fmt.Errorf("%w\nhint: if running in DinD, ensure the repo path is visible to the Docker daemon", err)
+		}
+		return out, nil
 	}
 }
 
@@ -122,6 +149,7 @@ func parseGoVersion(dir, repoRoot string) string {
 }
 
 // parseGoDirectiveFromFile reads a go.mod or go.work file and returns the go version directive.
+// Prefers the toolchain directive (e.g. "toolchain go1.22.6" → "1.22") over the go directive.
 func parseGoDirectiveFromFile(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -129,17 +157,30 @@ func parseGoDirectiveFromFile(path string) string {
 	}
 	defer f.Close()
 
+	var goVer string
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "go ") {
+		// "toolchain go1.22.6" is a stronger signal than "go 1.22"
+		if strings.HasPrefix(line, "toolchain ") {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
-				return fields[1]
+				ver := strings.TrimPrefix(fields[1], "go")
+				// Strip patch: "1.22.6" → "1.22"
+				if parts := strings.SplitN(ver, ".", 3); len(parts) >= 2 {
+					return parts[0] + "." + parts[1]
+				}
+				return ver
+			}
+		}
+		if goVer == "" && strings.HasPrefix(line, "go ") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				goVer = fields[1]
 			}
 		}
 	}
-	return ""
+	return goVer
 }
 
 // applyGoUpdates applies Go module dependency updates.
@@ -177,6 +218,10 @@ func applyGoUpdates(ctx context.Context, deps []freshness.Dependency, repoRoot s
 	touchedSet := make(map[string]struct{})
 
 	for _, group := range groupMap {
+		// Guard: module dir must be safely under repo root
+		if strings.HasPrefix(group.dir, "..") || filepath.IsAbs(group.dir) {
+			return applied, skipped, nil, fmt.Errorf("module dir %q escapes repo root", group.dir)
+		}
 		modulePath := filepath.Join(repoRoot, group.dir)
 
 		// Detect replace directives for this module
