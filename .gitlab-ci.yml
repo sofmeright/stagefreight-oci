@@ -64,11 +64,11 @@ security-scan:
     - if: '$CI_COMMIT_TAG'
       variables:
         SCAN_IMAGE: "docker.io/prplanit/stagefreight:$CI_COMMIT_TAG"
-      when: always
+      when: on_success
     - if: '$CI_COMMIT_BRANCH == "main"'
       variables:
         SCAN_IMAGE: "docker.io/prplanit/stagefreight:latest-dev"
-      when: always
+      when: on_success
   allow_failure: true
 
 generate-docs:
@@ -85,9 +85,9 @@ generate-docs:
     - stagefreight component docs --commit
   rules:
     - if: '$CI_COMMIT_TAG'
-      when: always
+      when: on_success
     - if: '$CI_COMMIT_BRANCH == "main"'
-      when: always
+      when: on_success
   allow_failure: true
 
 create-release:
@@ -106,5 +106,5 @@ create-release:
     - stagefreight release badge
   rules:
     - if: '$CI_COMMIT_TAG'
-      when: always
+      when: on_success
   allow_failure: true
