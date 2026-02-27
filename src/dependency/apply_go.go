@@ -13,12 +13,145 @@ import (
 	"github.com/sofmeright/stagefreight/src/lint/modules/freshness"
 )
 
+// goRunner executes a go subcommand in the given directory.
+type goRunner func(ctx context.Context, dir string, args ...string) ([]byte, error)
+
+// resolveGoRunner tries strategies in order and returns the first available go runner.
+func resolveGoRunner(repoRoot string) (goRunner, error) {
+	// Strategy 1: Native go binary in PATH
+	if _, err := exec.LookPath("go"); err == nil {
+		return nativeGoRunner, nil
+	}
+	// Strategy 2: Toolcache (STAGEFREIGHT_GO_HOME or /toolcache/go)
+	if goHome := toolcacheGoHome(); goHome != "" {
+		return toolcacheGoRunner(goHome), nil
+	}
+	// Strategy 3: Container runtime (docker/podman/nerdctl)
+	if rt := detectContainerRuntime(); rt != "" {
+		return containerGoRunner(rt, repoRoot), nil
+	}
+	// Strategy 4: Error
+	return nil, fmt.Errorf("go toolchain not found: install Go, set STAGEFREIGHT_GO_HOME, or ensure a container runtime (docker/podman/nerdctl) is available")
+}
+
+func nativeGoRunner(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.Dir = dir
+	cmd.Env = os.Environ()
+	return cmd.CombinedOutput()
+}
+
+func toolcacheGoRunner(goHome string) goRunner {
+	goBin := filepath.Join(goHome, "bin", "go")
+	return func(ctx context.Context, dir string, args ...string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, goBin, args...)
+		cmd.Dir = dir
+		cmd.Env = os.Environ()
+		return cmd.CombinedOutput()
+	}
+}
+
+func toolcacheGoHome() string {
+	if env := os.Getenv("STAGEFREIGHT_GO_HOME"); env != "" {
+		if _, err := os.Stat(filepath.Join(env, "bin", "go")); err == nil {
+			return env
+		}
+	}
+	if _, err := os.Stat("/toolcache/go/bin/go"); err == nil {
+		return "/toolcache/go"
+	}
+	return ""
+}
+
+func detectContainerRuntime() string {
+	for _, rt := range []string{"docker", "podman", "nerdctl"} {
+		if _, err := exec.LookPath(rt); err == nil {
+			return rt
+		}
+	}
+	return ""
+}
+
+func containerGoRunner(runtime, repoRoot string) goRunner {
+	return func(ctx context.Context, dir string, args ...string) ([]byte, error) {
+		ver := parseGoVersion(dir, repoRoot)
+		image := fmt.Sprintf("docker.io/library/golang:%s-alpine", ver)
+
+		relDir, err := filepath.Rel(repoRoot, dir)
+		if err != nil {
+			relDir = "."
+		}
+		workDir := "/src"
+		if relDir != "." && relDir != "" {
+			workDir = "/src/" + filepath.ToSlash(relDir)
+		}
+
+		runArgs := []string{"run", "--rm", "-v", repoRoot + ":/src", "-w", workDir}
+		// Pass through Go module-relevant environment variables
+		for _, key := range []string{"GOPROXY", "GONOSUMDB", "GOPRIVATE", "GONOSUMCHECK", "GONOPROXY", "GOFLAGS"} {
+			if val, ok := os.LookupEnv(key); ok {
+				runArgs = append(runArgs, "-e", key+"="+val)
+			}
+		}
+
+		runArgs = append(runArgs, image, "go")
+		runArgs = append(runArgs, args...)
+
+		cmd := exec.CommandContext(ctx, runtime, runArgs...)
+		return cmd.CombinedOutput()
+	}
+}
+
+// parseGoVersion extracts the go directive version from go.work or go.mod.
+func parseGoVersion(dir, repoRoot string) string {
+	// Prefer go.work at repo root (workspace mode)
+	if ver := parseGoDirectiveFromFile(filepath.Join(repoRoot, "go.work")); ver != "" {
+		return ver
+	}
+	// Try go.mod in module directory
+	if ver := parseGoDirectiveFromFile(filepath.Join(dir, "go.mod")); ver != "" {
+		return ver
+	}
+	// Try go.mod at repo root
+	if dir != repoRoot {
+		if ver := parseGoDirectiveFromFile(filepath.Join(repoRoot, "go.mod")); ver != "" {
+			return ver
+		}
+	}
+	return "1.24"
+}
+
+// parseGoDirectiveFromFile reads a go.mod or go.work file and returns the go version directive.
+func parseGoDirectiveFromFile(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "go ") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				return fields[1]
+			}
+		}
+	}
+	return ""
+}
+
 // applyGoUpdates applies Go module dependency updates.
 // Returns touched module dirs (repoRoot-relative) as the 3rd value —
 // only dirs where go get + go mod tidy both succeeded.
 func applyGoUpdates(ctx context.Context, deps []freshness.Dependency, repoRoot string) ([]AppliedUpdate, []SkippedDep, []string, error) {
-	// Check for go.work — skip all Go updates in workspace context for v1
-	// go.work: per-module only, no workspace sync
+	runGo, err := resolveGoRunner(repoRoot)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Check for go.work — workspace mode uses -C with relative paths
 	hasWorkspace := false
 	if _, err := os.Stat(filepath.Join(repoRoot, "go.work")); err == nil {
 		hasWorkspace = true
@@ -78,36 +211,35 @@ func applyGoUpdates(ctx context.Context, deps []freshness.Dependency, repoRoot s
 			continue
 		}
 
-		// Batch go get
-		goGetArgs := []string{"get"}
+		// Determine working directory and build go get args
+		var goDir string
 		if hasWorkspace {
-			goGetArgs = append([]string{"-C", modulePath, "get"}, getArgs...)
+			goDir = repoRoot
 		} else {
-			goGetArgs = append(goGetArgs, getArgs...)
+			goDir = modulePath
 		}
 
-		cmd := exec.CommandContext(ctx, "go", goGetArgs...)
-		if !hasWorkspace {
-			cmd.Dir = modulePath
+		var goGetArgs []string
+		if hasWorkspace {
+			goGetArgs = append([]string{"-C", group.dir, "get"}, getArgs...)
+		} else {
+			goGetArgs = append([]string{"get"}, getArgs...)
 		}
-		cmd.Env = os.Environ() // inherit GOPROXY, GONOSUMDB, GOPRIVATE
-		if out, err := cmd.CombinedOutput(); err != nil {
+
+		out, err := runGo(ctx, goDir, goGetArgs...)
+		if err != nil {
 			return applied, skipped, nil, fmt.Errorf("go get in %s: %s\n%w", group.dir, string(out), err)
 		}
 
 		// go mod tidy
 		var tidyArgs []string
 		if hasWorkspace {
-			tidyArgs = []string{"-C", modulePath, "mod", "tidy"}
+			tidyArgs = []string{"-C", group.dir, "mod", "tidy"}
 		} else {
 			tidyArgs = []string{"mod", "tidy"}
 		}
-		tidyCmd := exec.CommandContext(ctx, "go", tidyArgs...)
-		if !hasWorkspace {
-			tidyCmd.Dir = modulePath
-		}
-		tidyCmd.Env = os.Environ()
-		if out, err := tidyCmd.CombinedOutput(); err != nil {
+		out, err = runGo(ctx, goDir, tidyArgs...)
+		if err != nil {
 			return applied, skipped, nil, fmt.Errorf("go mod tidy in %s: %s\n%w", group.dir, string(out), err)
 		}
 

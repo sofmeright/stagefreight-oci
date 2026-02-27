@@ -87,7 +87,7 @@ func Update(ctx context.Context, cfg UpdateConfig, deps []freshness.Dependency) 
 		for _, d := range result.TouchedModuleDirs {
 			absDirs = append(absDirs, filepath.Join(repoRoot, d))
 		}
-		log, verifyErr := Verify(ctx, absDirs, true, cfg.Vulncheck)
+		log, verifyErr := Verify(ctx, absDirs, repoRoot, true, cfg.Vulncheck)
 		result.Verified = true
 		result.VerifyLog = log
 		result.VerifyErr = verifyErr

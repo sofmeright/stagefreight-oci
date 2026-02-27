@@ -12,7 +12,7 @@ import (
 // Verify runs post-update verification (go test + govulncheck) on the
 // given module directories. moduleDirs should be absolute paths — only
 // dirs where updates were actually applied.
-func Verify(ctx context.Context, moduleDirs []string, runTests, runVulncheck bool) (string, error) {
+func Verify(ctx context.Context, moduleDirs []string, repoRoot string, runTests, runVulncheck bool) (string, error) {
 	var log strings.Builder
 	var firstErr error
 
@@ -32,9 +32,18 @@ func Verify(ctx context.Context, moduleDirs []string, runTests, runVulncheck boo
 	}
 	sort.Strings(dirs)
 
+	var runGo goRunner
+	if runTests {
+		var err error
+		runGo, err = resolveGoRunner(repoRoot)
+		if err != nil {
+			return "", fmt.Errorf("go toolchain: %w", err)
+		}
+	}
+
 	for _, dir := range dirs {
 		if runTests {
-			testLog, err := runGoTest(ctx, dir)
+			testLog, err := runGoTest(ctx, dir, runGo)
 			log.WriteString(fmt.Sprintf("=== go test ./... (%s) ===\n", dir))
 			log.WriteString(testLog)
 			log.WriteString("\n")
@@ -59,11 +68,8 @@ func Verify(ctx context.Context, moduleDirs []string, runTests, runVulncheck boo
 	return log.String(), firstErr
 }
 
-func runGoTest(ctx context.Context, dir string) (string, error) {
-	cmd := exec.CommandContext(ctx, "go", "test", "./...")
-	cmd.Dir = dir
-	cmd.Env = os.Environ()
-	out, err := cmd.CombinedOutput()
+func runGoTest(ctx context.Context, dir string, runGo goRunner) (string, error) {
+	out, err := runGo(ctx, dir, "test", "./...")
 	return string(out), err
 }
 
