@@ -152,7 +152,16 @@ func syncReadmeCollect(ctx context.Context, readmeCfg config.DockerReadmeConfig,
 			short = reg.Description
 		}
 
-		if err := client.UpdateDescription(ctx, reg.Path, short, content.Full); err != nil {
+		err = client.UpdateDescription(ctx, reg.Path, short, content.Full)
+
+		// Surface credential warnings (populated during auth)
+		if w, ok := client.(registry.Warner); ok {
+			for _, warn := range w.Warnings() {
+				fmt.Fprintf(os.Stderr, "warning: %s: %s\n", name, warn)
+			}
+		}
+
+		if err != nil {
 			if registry.IsForbidden(err) {
 				results = append(results, readmeSyncResult{Registry: name, Status: "skipped", Detail: "forbidden (PAT cannot update descriptions; use password with 2FA disabled)"})
 				continue
@@ -218,7 +227,16 @@ func syncReadmeToRegistries(ctx context.Context, w io.Writer, readmeCfg config.D
 			short = reg.Description
 		}
 
-		if err := client.UpdateDescription(ctx, reg.Path, short, content.Full); err != nil {
+		err = client.UpdateDescription(ctx, reg.Path, short, content.Full)
+
+		// Surface credential warnings (populated during auth)
+		if w2, ok := client.(registry.Warner); ok {
+			for _, warn := range w2.Warnings() {
+				fmt.Fprintf(w, "  readme: warning %s/%s: %s\n", reg.URL, reg.Path, warn)
+			}
+		}
+
+		if err != nil {
 			if registry.IsForbidden(err) {
 				skipped++
 				if verbose {

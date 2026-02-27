@@ -8,14 +8,14 @@ import (
 )
 
 // DockerHub implements the Registry interface for Docker Hub.
-// Uses hub.docker.com v2 API for listing and deleting tags.
-// Deletion requires a Personal Access Token (PAT) or password — the
-// Docker Hub API does not support token-scoped deletion via registry v2.
+// Uses hub.docker.com v2 API for listing, deleting tags, and updating descriptions.
+// Authenticates via /v2/auth/token (supports both PATs and passwords).
 type DockerHub struct {
-	client   httpClient
-	user     string
-	pass     string
-	jwtToken string
+	client      httpClient
+	user        string
+	pass        string
+	accessToken string
+	warnings    []string
 }
 
 func NewDockerHub(user, pass string) *DockerHub {
@@ -28,33 +28,42 @@ func NewDockerHub(user, pass string) *DockerHub {
 	}
 }
 
-func (d *DockerHub) Provider() string { return "dockerhub" }
+func (d *DockerHub) Provider() string { return "docker" }
 
-// authenticate obtains a JWT token from Docker Hub. Cached for the session.
+func (d *DockerHub) Warnings() []string { return d.warnings }
+
+// authenticate obtains a Bearer token from Docker Hub. Cached for the session.
+// Uses the /v2/auth/token endpoint which accepts both PATs and passwords.
+// When a password is detected (no dckr_pat_ prefix), a warning is appended
+// to Warnings recommending scoped PATs.
 func (d *DockerHub) authenticate(ctx context.Context) error {
-	if d.jwtToken != "" {
+	if d.accessToken != "" {
 		return nil
 	}
 	if d.user == "" || d.pass == "" {
 		return fmt.Errorf("dockerhub: credentials required for tag management")
 	}
 
-	var resp struct {
-		Token string `json:"token"`
-	}
-	payload := map[string]string{
-		"username": d.user,
-		"password": d.pass,
+	if !strings.HasPrefix(d.pass, "dckr_pat_") {
+		d.warnings = append(d.warnings, "Docker Hub password detected — consider using a Personal Access Token (read/write/delete scope) instead: https://hub.docker.com/settings/security")
 	}
 
-	_, err := d.client.doJSON(ctx, "POST", "https://hub.docker.com/v2/users/login/", payload, &resp)
+	var resp struct {
+		AccessToken string `json:"access_token"`
+	}
+	payload := map[string]string{
+		"identifier": d.user,
+		"secret":     d.pass,
+	}
+
+	_, err := d.client.doJSON(ctx, "POST", "https://hub.docker.com/v2/auth/token", payload, &resp)
 	if err != nil {
 		return fmt.Errorf("dockerhub: authentication failed: %w", err)
 	}
 
-	d.jwtToken = resp.Token
+	d.accessToken = resp.AccessToken
 	d.client.headers = map[string]string{
-		"Authorization": "JWT " + d.jwtToken,
+		"Authorization": "Bearer " + d.accessToken,
 	}
 	return nil
 }

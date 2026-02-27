@@ -29,6 +29,12 @@ type Registry interface {
 	UpdateDescription(ctx context.Context, repo, short, full string) error
 }
 
+// Warner is an optional interface for registries that emit warnings
+// (e.g., credential hygiene nudges). Callers can type-assert to check.
+type Warner interface {
+	Warnings() []string
+}
+
 // TagInfo describes a single tag in a container registry.
 type TagInfo struct {
 	Name      string
