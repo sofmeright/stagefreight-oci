@@ -2,6 +2,7 @@
 
 ## Reference
 
+- [Dependency Update](DependencyUpdate.md) — `dependency update` command, Go toolchain strategies, container runner, artifacts
 - [Docker Build](Docker.md) — Full `docker:` block schema, registries, cache, retention, build strategy
 - [Release Management](Release.md) — Full `release:` block schema, sync targets, rolling tags, CLI commands
 - [Security Scanning](Security.md) — Full `security:` block schema, detail levels, scan artifacts
