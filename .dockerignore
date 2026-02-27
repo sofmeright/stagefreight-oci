@@ -1,0 +1,26 @@
+# Git
+.git
+.gitignore
+
+# CI/CD
+.gitlab-ci.yml
+.stagefreight.yml
+.stagefreight/
+
+# Documentation
+docs/
+README.md
+LICENSE
+CLAUDE.md
+
+# Build artifacts
+src/output/banner_art_gen.go
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Templates (GitLab CI component specs, not needed in image)
+templates/
