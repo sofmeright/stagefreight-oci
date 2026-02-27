@@ -1,13 +1,20 @@
 # .stagefreight.yml — Minimal
 #
-# Who: Solo dev, hobby project, just wants the basics.
-# What: Release notes generated from git log, badge SVG updated on release.
-# Build: None — this might be a script repo, a config repo, or something
-#        where the dev handles builds themselves.
-# Why: 4 lines. Zero friction. Immediate value.
+# Who: Solo dev, hobby project, just wants to build and push.
+# What: Builds a single Docker image and pushes it to one registry.
+# Build: Auto-detected Dockerfile, single platform.
+# Why: The smallest useful manifest — 10 lines, one image out the door.
 
 version: 1
 
-release:
-  notes: true
-  badge: true
+builds:
+  - id: app
+    kind: docker
+
+targets:
+  - id: dockerhub
+    kind: registry
+    build: app
+    url: docker.io
+    path: sofmeright/my-app
+    tags: ["{version}", latest]

@@ -13,33 +13,37 @@
 
 version: 1
 
-release:
-  notes: true
-  badge: true
+targets:
+  - id: primary-release
+    kind: release
+    when: { git_tags: ["re:.*"], events: [tag] }
 
 security:
-  scan: true
+  enabled: true
   sbom: true
-  audit_deps: true
-  secret_findings: alert
 
-license:
-  compliance: true
-  headers: true
-  spdx: true
-
-docs:
-  readme_sync: [npm]                  # push README to npm package page
-
-flair:
-  badges: auto
-
-dev:
-  test:
-    sanity:
-      - { name: install, run: "npm ci" }
-      - { name: lint, run: "npm run lint" }
-      - { name: typecheck, run: "npm run typecheck" }
-      - { name: unit-tests, run: "npm test -- --coverage" }
-      - { name: build, run: "npm run build" }
-      - { name: package-dry-run, run: "npm publish --dry-run" }
+# ── Roadmap (not yet implemented) ──────────────────────────────
+# security:
+#   audit_deps: true
+#   secret_findings: alert
+#
+# license:
+#   compliance: true
+#   headers: true
+#   spdx: true
+#
+# docs:
+#   readme_sync: [npm]
+#
+# flair:
+#   badges: auto
+#
+# dev:
+#   test:
+#     sanity:
+#       - { name: install, run: "npm ci" }
+#       - { name: lint, run: "npm run lint" }
+#       - { name: typecheck, run: "npm run typecheck" }
+#       - { name: unit-tests, run: "npm test -- --coverage" }
+#       - { name: build, run: "npm run build" }
+#       - { name: package-dry-run, run: "npm publish --dry-run" }

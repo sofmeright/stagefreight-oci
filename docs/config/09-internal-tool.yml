@@ -10,38 +10,53 @@
 
 version: 1
 
-release:
-  notes: true
+policies:
+  branches:
+    all: ".*"
 
-docker:
-  platforms: [linux/amd64]
-  registries:
-    - url: registry.prplanit.com
-      path: internal/expense-tracker
-      tags: ["{version}", "{branch}-{sha:.7}", "{branch}-latest"]
-      branches: ["*"]
+builds:
+  - id: expense-tracker
+    kind: docker
+    platforms: [linux/amd64]
+
+targets:
+  # All branches push to the private registry — no public exposure
+  - id: internal-registry
+    kind: registry
+    build: expense-tracker
+    url: registry.prplanit.com
+    path: internal/expense-tracker
+    tags: ["{version}", "{branch}-{sha:.7}", "{branch}-latest"]
+    when: { branches: [all], events: [push] }
+
+  - id: primary-release
+    kind: release
+    when: { git_tags: ["re:.*"], events: [tag] }
 
 security:
-  scan: true
-  secret_findings: alert
+  enabled: true
 
-dev:
-  target: dev
-  env:
-    DATABASE_URL: postgres://dev:dev@db:5432/expenses_dev
-    OIDC_ISSUER: http://localhost:9000
-    OIDC_CLIENT_ID: dev-client
-    OIDC_CLIENT_SECRET: dev-secret
-  services:
-    db:
-      image: docker.io/library/postgres:17-alpine
-      env: { POSTGRES_USER: dev, POSTGRES_PASSWORD: dev, POSTGRES_DB: expenses_dev }
-      healthcheck: { test: "pg_isready -U dev", interval: 5s }
-  ports: ["3000:3000"]
-  test:
-    startup: { timeout: 20s, depends_on: [db] }
-    healthchecks:
-      - { name: http, type: http, url: "http://localhost:3000/health", expect_status: 200 }
-    sanity:
-      - { name: migrations, run: "npx prisma migrate deploy" }
-      - { name: tests, run: "npm test" }
+# ── Roadmap (not yet implemented) ──────────────────────────────
+# security:
+#   secret_findings: alert
+#
+# dev:
+#   target: dev
+#   env:
+#     DATABASE_URL: postgres://dev:dev@db:5432/expenses_dev
+#     OIDC_ISSUER: http://localhost:9000
+#     OIDC_CLIENT_ID: dev-client
+#     OIDC_CLIENT_SECRET: dev-secret
+#   services:
+#     db:
+#       image: docker.io/library/postgres:17-alpine
+#       env: { POSTGRES_USER: dev, POSTGRES_PASSWORD: dev, POSTGRES_DB: expenses_dev }
+#       healthcheck: { test: "pg_isready -U dev", interval: 5s }
+#   ports: ["3000:3000"]
+#   test:
+#     startup: { timeout: 20s, depends_on: [db] }
+#     healthchecks:
+#       - { name: http, type: http, url: "http://localhost:3000/health", expect_status: 200 }
+#     sanity:
+#       - { name: migrations, run: "npx prisma migrate deploy" }
+#       - { name: tests, run: "npm test" }

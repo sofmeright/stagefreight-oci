@@ -12,47 +12,61 @@
 
 version: 1
 
-fork:
-  upstream: github.com/itzg/docker-minecraft-server
-  strategy: merge                     # merge, not rebase — mod patches can conflict
-  auto_sync: true
+policies:
+  branches:
+    main: "^main$"
 
-release:
-  notes: true
+builds:
+  - id: minecraft-modded
+    kind: docker
+    platforms: [linux/amd64]
 
-docker:
-  platforms: [linux/amd64]            # game servers are almost always amd64
-  registries:
-    - url: registry.prplanit.com
-      path: games/minecraft-modded
-      tags: ["{version}", latest]
-  rebuild:
-    schedule: weekly
-    on_base_update: true
-    notify: true
+targets:
+  - id: private-registry
+    kind: registry
+    build: minecraft-modded
+    url: registry.prplanit.com
+    path: games/minecraft-modded
+    tags: ["{version}", latest]
+    when: { branches: [main], events: [push] }
 
-dev:
-  env:
-    EULA: "TRUE"
-    TYPE: FABRIC
-    VERSION: "1.21.4"
-    MEMORY: 4G
-    DIFFICULTY: normal
-    MODE: survival
-    MOTD: "StageFreight Dev Server"
-  ports:
-    - "25565:25565"                   # Minecraft
-    - "25575:25575"                   # RCON
-  volumes:
-    - ./mods:/data/mods
-    - ./config:/data/config
-    - server-data:/data/world
-  test:
-    startup: { timeout: 120s }        # game servers are slow to start
-    healthchecks:
-      - { name: tcp-ready, type: tcp, host: localhost, port: 25565, timeout: 10s }
-    sanity:
-      - { name: rcon-ping, run: "rcon-cli --host localhost --port 25575 --password dev 'list'" }
-    teardown: always
+  - id: primary-release
+    kind: release
+    when: { git_tags: ["re:.*"], events: [tag] }
 
-yolo: true                            # it's a game server, just ship it
+# ── Roadmap (not yet implemented) ──────────────────────────────
+# fork:
+#   upstream: github.com/itzg/docker-minecraft-server
+#   strategy: merge
+#   auto_sync: true
+#
+# rebuild:
+#   schedule: weekly
+#   on_base_update: true
+#   notify: true
+#
+# yolo: true
+#
+# dev:
+#   env:
+#     EULA: "TRUE"
+#     TYPE: FABRIC
+#     VERSION: "1.21.4"
+#     MEMORY: 4G
+#     DIFFICULTY: normal
+#     MODE: survival
+#     MOTD: "StageFreight Dev Server"
+#   ports:
+#     - "25565:25565"
+#     - "25575:25575"
+#   volumes:
+#     - ./mods:/data/mods
+#     - ./config:/data/config
+#     - server-data:/data/world
+#   test:
+#     startup: { timeout: 120s }
+#     healthchecks:
+#       - { name: tcp-ready, type: tcp, host: localhost, port: 25565, timeout: 10s }
+#     sanity:
+#       - { name: rcon-ping, run: "rcon-cli --host localhost --port 25575 --password dev 'list'" }
+#     teardown: always

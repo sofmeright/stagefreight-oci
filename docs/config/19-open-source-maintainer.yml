@@ -11,77 +11,112 @@
 #      automates the maintenance so they can focus on code.
 
 version: 1
-source: true
 
-release:
-  notes: true
-  badge: true
+policies:
+  git_tags:
+    stable: "^\\d+\\.\\d+\\.\\d+$"
+  branches:
+    main: "^main$"
 
-docker:
-  platforms: [linux/amd64, linux/arm64, linux/arm/v7]
-  registries:
-    - url: docker.io
-      path: myorg/myproject
-      tags: ["{version}", "{major}.{minor}", "{major}", latest]
-      branches: [main]
-    - url: ghcr.io
-      path: myorg/myproject
-      tags: ["{version}", latest]
-      branches: [main]
-    - url: quay.io
-      path: myorg/myproject
-      tags: ["{version}", latest]
-      branches: [main]
-  rebuild:
-    schedule: weekly
-    on_base_update: true
-    notify: true
+builds:
+  - id: myproject
+    kind: docker
+    platforms: [linux/amd64, linux/arm64, linux/arm/v7]
 
-docs:
-  readme_inputs: true
-  readme_sync: [dockerhub, ghcr, quay]
+targets:
+  # Docker Hub — full rolling tag set for community discoverability
+  - id: dockerhub
+    kind: registry
+    build: myproject
+    url: docker.io
+    path: myorg/myproject
+    tags: ["{version}", "{major}.{minor}", "{major}", latest]
+    when: { branches: [main], events: [push] }
+
+  # GitHub Container Registry
+  - id: ghcr
+    kind: registry
+    build: myproject
+    url: ghcr.io
+    path: myorg/myproject
+    tags: ["{version}", latest]
+    when: { branches: [main], events: [push] }
+
+  # Quay.io — some distros and enterprise users prefer it
+  - id: quay
+    kind: registry
+    build: myproject
+    url: quay.io
+    path: myorg/myproject
+    tags: ["{version}", latest]
+    when: { branches: [main], events: [push] }
+
+  # README sync to Docker Hub
+  - id: dockerhub-readme
+    kind: docker-readme
+    url: docker.io
+    path: myorg/myproject
+    when: { branches: [main], events: [push, tag] }
+    file: README.md
+
+  - id: primary-release
+    kind: release
+    aliases: ["{version}", "{major}.{minor}", latest]
+    when: { git_tags: [stable], events: [tag] }
 
 security:
-  scan: true
-  sbom: true                          # public SBOM builds trust
+  enabled: true
+  sbom: true
   fail_on_critical: true
-  audit_deps: true
-  secret_findings: alert
-  codebase_audit: true                # invisible chars, bidi overrides, AI prompt injection
-  codebase_audit_threshold: critical  # community PRs get scanned — fail on critical only
 
-license:
-  compliance: true
-  headers: true
-  spdx: true
-
-templates:
-  golden_files: true                  # CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md
-  gitignore: true
-
-flair:
-  badges: auto
-
-dev:
-  target: dev
-  env:
-    DATABASE_URL: postgres://dev:dev@db:5432/myproject_dev
-    LOG_LEVEL: debug
-  services:
-    db:
-      image: docker.io/library/postgres:17-alpine
-      env: { POSTGRES_USER: dev, POSTGRES_PASSWORD: dev, POSTGRES_DB: myproject_dev }
-      healthcheck: { test: "pg_isready -U dev", interval: 5s }
-  ports: ["8080:8080"]
-  test:
-    startup: { timeout: 30s, depends_on: [db] }
-    healthchecks:
-      - { name: http, type: http, url: "http://localhost:8080/health", expect_status: 200 }
-    sanity:
-      - { name: migrations, run: "./manage.py migrate --check" }
-      - { name: lint, run: "npm run lint" }
-      - { name: tests, run: "npm test -- --coverage" }
-      - { name: smoke, run: "curl -sf http://localhost:8080/api/status | jq -e '.ok'" }
-    teardown: always
-
-yolo: false                           # community projects review everything
+# ── Roadmap (not yet implemented) ──────────────────────────────
+# rebuild:
+#   schedule: weekly
+#   on_base_update: true
+#   notify: true
+#
+# docs:
+#   readme_inputs: true
+#   readme_sync: [dockerhub, ghcr, quay]
+#
+# security:
+#   audit_deps: true
+#   secret_findings: alert
+#   codebase_audit: true
+#   codebase_audit_threshold: critical
+#
+# license:
+#   compliance: true
+#   headers: true
+#   spdx: true
+#
+# templates:
+#   golden_files: true
+#   gitignore: true
+#
+# flair:
+#   badges: auto
+#
+# dev:
+#   target: dev
+#   env:
+#     DATABASE_URL: postgres://dev:dev@db:5432/myproject_dev
+#     LOG_LEVEL: debug
+#   services:
+#     db:
+#       image: docker.io/library/postgres:17-alpine
+#       env: { POSTGRES_USER: dev, POSTGRES_PASSWORD: dev, POSTGRES_DB: myproject_dev }
+#       healthcheck: { test: "pg_isready -U dev", interval: 5s }
+#   ports: ["8080:8080"]
+#   test:
+#     startup: { timeout: 30s, depends_on: [db] }
+#     healthchecks:
+#       - { name: http, type: http, url: "http://localhost:8080/health", expect_status: 200 }
+#     sanity:
+#       - { name: migrations, run: "./manage.py migrate --check" }
+#       - { name: lint, run: "npm run lint" }
+#       - { name: tests, run: "npm test -- --coverage" }
+#       - { name: smoke, run: "curl -sf http://localhost:8080/api/status | jq -e '.ok'" }
+#     teardown: always
+#
+# yolo: false

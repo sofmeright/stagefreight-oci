@@ -3,65 +3,192 @@
 # Who: Image maintainers following the LinuxServer.io pattern — S6-overlay
 #      init system, PUID/PGID support, custom cont-init.d scripts, abc user.
 #      Common for self-hosted application images.
-# What: Multi-platform image with LSCR-style tagging convention. S6-overlay
-#       adds complexity to Dockerfile and startup — healthchecks need to
-#       account for the init sequence.
+# What: Multi-platform image published to Docker Hub and lscr.io (ghcr.io)
+#       with LSCR's real tagging convention. Three channels: stable, develop,
+#       nightly — each producing multi-arch manifests plus per-arch tags.
 # Build: Dockerfile with S6-overlay, custom init scripts, multi-platform.
-# Why: The LSCR pattern is extremely popular in the self-hosted community.
-#      This example shows StageFreight handling the specific tag conventions
-#      and healthcheck timing that S6 images need.
+# Why: LSCR is the most popular self-hosted image convention. This example
+#      reproduces their actual tag patterns (sourced from linuxserver/sonarr
+#      and linuxserver/calibre-web on Docker Hub) to prove the v1 schema
+#      handles real vendor-specific multi-registry, multi-channel complexity.
+#
+# Real LSCR tag patterns (from linuxserver/sonarr 4.0.16):
+#
+#   Stable multi-arch:   latest, 4.0.16, version-4.0.16.2944, 4.0.16.2944-ls303
+#   Stable per-arch:     amd64-latest, amd64-4.0.16, amd64-version-4.0.16.2944,
+#                        amd64-4.0.16.2944-ls303
+#   Develop multi-arch:  develop, 4.0.16-develop, develop-version-4.0.16.2946,
+#                        develop-4.0.16.2946-ls160
+#   Nightly multi-arch:  nightly, nightly-version-5e48a64b, nightly-5e48a64b-ls335
 
 version: 1
 
-release:
-  notes: true
-  badge: true
+vars:
+  org: sofmeright
+  app: my-s6-app
 
-docker:
-  platforms: [linux/amd64, linux/arm64, linux/arm/v7]
-  build_args:
-    S6_OVERLAY_VERSION: "3.2.0.2"
-  registries:
-    - url: docker.io
-      path: prplanit/my-s6-app
-      tags:
-        - "{version}"
-        - "{major}.{minor}"
-        - latest
-    - url: ghcr.io
-      path: sofmeright/my-s6-app
-      tags: ["{version}", latest]
-    - url: lscr.io
-      path: sofmeright/my-s6-app
-      tags:
-        - "{version}-ls{build}"       # LinuxServer.io convention
-        - latest
-  rebuild:
-    schedule: weekly
-    on_base_update: true
+policies:
+  git_tags:
+    stable: "^\\d+\\.\\d+\\.\\d+$"
+  branches:
+    main: "^main$"
+    develop: "^develop$"
 
-docs:
-  readme_sync: [dockerhub, ghcr]
+builds:
+  - id: my-s6-app
+    kind: docker
+    platforms: [linux/amd64, linux/arm64, linux/arm/v7]
+    build_args:
+      S6_OVERLAY_VERSION: "3.2.0.2"
+
+targets:
+  # ── Stable channel ──────────────────────────────────────────
+  # Multi-arch manifests on Docker Hub
+  - id: dockerhub-stable
+    kind: registry
+    build: my-s6-app
+    url: docker.io
+    provider: docker
+    path: "{var:org}/{var:app}"
+    tags:
+      - latest
+      - "{version}"                        # 4.0.16
+      - "version-{version_full}"           # version-4.0.16.2944
+      - "{version_full}-ls{build}"         # 4.0.16.2944-ls303
+    when: { git_tags: [stable], events: [tag] }
+    credentials: DOCKER
+
+  # Multi-arch manifests on lscr.io (ghcr.io vanity)
+  - id: lscr-stable
+    kind: registry
+    build: my-s6-app
+    url: lscr.io
+    path: "{var:org}/{var:app}"
+    tags:
+      - latest
+      - "{version}"
+      - "version-{version_full}"
+      - "{version_full}-ls{build}"
+    when: { git_tags: [stable], events: [tag] }
+    credentials: LSCR
+
+  # Per-arch tags on Docker Hub (amd64-*, arm64v8-*)
+  # LSCR publishes arch-prefixed tags alongside multi-arch manifests
+  # for legacy consumers that can't resolve manifests.
+  - id: dockerhub-stable-perarch
+    kind: registry
+    build: my-s6-app
+    url: docker.io
+    provider: docker
+    path: "{var:org}/{var:app}"
+    tags:
+      - "{arch}-latest"                    # amd64-latest
+      - "{arch}-{version}"                 # amd64-4.0.16
+      - "{arch}-version-{version_full}"    # amd64-version-4.0.16.2944
+      - "{arch}-{version_full}-ls{build}"  # amd64-4.0.16.2944-ls303
+    when: { git_tags: [stable], events: [tag] }
+    credentials: DOCKER
+
+  # ── Develop channel ─────────────────────────────────────────
+  - id: dockerhub-develop
+    kind: registry
+    build: my-s6-app
+    url: docker.io
+    provider: docker
+    path: "{var:org}/{var:app}"
+    tags:
+      - develop
+      - "{version}-develop"                     # 4.0.16-develop
+      - "develop-version-{version_full}"        # develop-version-4.0.16.2946
+      - "develop-{version_full}-ls{build}"      # develop-4.0.16.2946-ls160
+    when: { branches: [develop], events: [push] }
+    credentials: DOCKER
+    retention:
+      keep_last: 10
+      protect: [develop]
+
+  - id: dockerhub-develop-perarch
+    kind: registry
+    build: my-s6-app
+    url: docker.io
+    provider: docker
+    path: "{var:org}/{var:app}"
+    tags:
+      - "{arch}-develop"
+      - "{arch}-{version}-develop"
+      - "{arch}-develop-version-{version_full}"
+      - "{arch}-develop-{version_full}-ls{build}"
+    when: { branches: [develop], events: [push] }
+    credentials: DOCKER
+
+  # ── Nightly channel ─────────────────────────────────────────
+  - id: dockerhub-nightly
+    kind: registry
+    build: my-s6-app
+    url: docker.io
+    provider: docker
+    path: "{var:org}/{var:app}"
+    tags:
+      - nightly
+      - "nightly-version-{sha:8}"               # nightly-version-5e48a64b
+      - "nightly-{sha:8}-ls{build}"             # nightly-5e48a64b-ls335
+    when: { branches: [main], events: [push] }
+    credentials: DOCKER
+    retention:
+      keep_last: 10
+      protect: [nightly]
+
+  - id: dockerhub-nightly-perarch
+    kind: registry
+    build: my-s6-app
+    url: docker.io
+    provider: docker
+    path: "{var:org}/{var:app}"
+    tags:
+      - "{arch}-nightly"
+      - "{arch}-nightly-version-{sha:8}"
+      - "{arch}-nightly-{sha:8}-ls{build}"
+    when: { branches: [main], events: [push] }
+    credentials: DOCKER
+
+  # ── README sync ──────────────────────────────────────────────
+  - id: dockerhub-readme
+    kind: docker-readme
+    url: docker.io
+    path: "{var:org}/{var:app}"
+    credentials: DOCKER
+    when: { branches: [main], events: [push, tag] }
+    file: README.md
+
+  # ── Release ──────────────────────────────────────────────────
+  - id: primary-release
+    kind: release
+    aliases: ["{version}", latest]
+    when: { git_tags: [stable], events: [tag] }
 
 security:
-  scan: true
+  enabled: true
   sbom: true
 
-dev:
-  env:
-    PUID: "1000"
-    PGID: "1000"
-    TZ: America/New_York
-  ports: ["8080:8080"]
-  volumes:
-    - ./config:/config
-  test:
-    startup: { timeout: 60s }         # S6 init takes time
-    healthchecks:
-      - { name: http, type: http, url: "http://localhost:8080/", expect_status: 200, timeout: 10s }
-    sanity:
-      # Verify S6 services are running
-      - { name: s6-services, run: "s6-rc -a list | grep -q 'svc-main'" }
-      - { name: user-correct, run: "id abc | grep -q 'uid=1000'" }
-
-yolo: true
+# ── Roadmap (not yet implemented) ──────────────────────────────
+# rebuild:
+#   schedule: weekly
+#   on_base_update: true
+#
+# yolo: true
+#
+# dev:
+#   env:
+#     PUID: "1000"
+#     PGID: "1000"
+#     TZ: America/New_York
+#   ports: ["8080:8080"]
+#   volumes:
+#     - ./config:/config
+#   test:
+#     startup: { timeout: 60s }
+#     healthchecks:
+#       - { name: http, type: http, url: "http://localhost:8080/", expect_status: 200, timeout: 10s }
+#     sanity:
+#       - { name: s6-services, run: "s6-rc -a list | grep -q 'svc-main'" }
+#       - { name: user-correct, run: "id abc | grep -q 'uid=1000'" }

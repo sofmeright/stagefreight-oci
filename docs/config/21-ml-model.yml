@@ -12,65 +12,82 @@
 
 version: 1
 
-release:
-  notes: true
+policies:
+  branches:
+    main: "^main$"
 
-docker:
-  platforms: [linux/amd64]            # GPU inference — amd64 only
-  build_args:
-    MODEL_VERSION: "{version}"
-    CUDA_VERSION: "12.4"
-  registries:
-    - url: registry.prplanit.com
-      path: ml/fraud-detector
-      tags: ["{version}", "{version}-cuda12.4", latest]
-      branches: [main]
-    - url: docker.io
-      path: prplanit/fraud-detector
-      tags: ["{version}", latest]
-      branches: [main]
+builds:
+  - id: fraud-detector
+    kind: docker
+    platforms: [linux/amd64]
+    build_args:
+      MODEL_VERSION: "{version}"
+      CUDA_VERSION: "12.4"
 
-# Model artifacts for standalone deployment (e.g., TensorRT, ONNX export)
-build:
-  artifacts:
-    - name: model-onnx
-      dockerfile: build/Dockerfile.export
-      target: export
-      platforms: [linux/amd64]
-      build_args:
-        MODEL_VERSION: "{version}"
-      extract:
-        - from: /out/model.onnx
-          to: dist/
-        - from: /out/tokenizer/
-          to: dist/tokenizer/
-      package:
-        - type: tar.gz
-          name: "fraud-detector-model-{version}.tar.gz"
-          contents: dist/
-  release_assets: true
+targets:
+  - id: private-registry
+    kind: registry
+    build: fraud-detector
+    url: registry.prplanit.com
+    path: ml/fraud-detector
+    tags: ["{version}", "{version}-cuda12.4", latest]
+    when: { branches: [main], events: [push] }
+
+  - id: dockerhub
+    kind: registry
+    build: fraud-detector
+    url: docker.io
+    path: prplanit/fraud-detector
+    tags: ["{version}", latest]
+    when: { branches: [main], events: [push] }
+
+  - id: primary-release
+    kind: release
+    when: { git_tags: ["re:.*"], events: [tag] }
 
 security:
-  scan: true
+  enabled: true
   sbom: true
-  audit_deps: true
 
-dev:
-  target: dev
-  env:
-    MODEL_PATH: /app/models/dev
-    INFERENCE_DEVICE: cpu             # CPU for local dev, GPU in prod
-    LOG_LEVEL: debug
-    PROMETHEUS_PORT: "9090"
-  ports: ["8080:8080", "9090:9090"]
-  test:
-    startup: { timeout: 120s }        # model loading is slow
-    healthchecks:
-      - { name: inference-api, type: http, url: "http://localhost:8080/health", expect_status: 200 }
-      - { name: metrics, type: http, url: "http://localhost:9090/metrics", expect_status: 200 }
-    sanity:
-      - { name: model-loaded, run: "curl -sf http://localhost:8080/model/status | jq -e '.loaded'" }
-      - { name: inference-test, run: "python scripts/test_inference.py --sample-data" }
-      - { name: unit-tests, run: "pytest tests/ -x --tb=short" }
-      - { name: benchmark, run: "python scripts/benchmark.py --iterations=100 --max-latency-ms=50" }
-    teardown: always
+# ── Roadmap (not yet implemented) ──────────────────────────────
+# build:
+#   artifacts:
+#     - name: model-onnx
+#       dockerfile: build/Dockerfile.export
+#       target: export
+#       platforms: [linux/amd64]
+#       build_args:
+#         MODEL_VERSION: "{version}"
+#       extract:
+#         - from: /out/model.onnx
+#           to: dist/
+#         - from: /out/tokenizer/
+#           to: dist/tokenizer/
+#       package:
+#         - type: tar.gz
+#           name: "fraud-detector-model-{version}.tar.gz"
+#           contents: dist/
+#   release_assets: true
+#
+# security:
+#   audit_deps: true
+#
+# dev:
+#   target: dev
+#   env:
+#     MODEL_PATH: /app/models/dev
+#     INFERENCE_DEVICE: cpu
+#     LOG_LEVEL: debug
+#     PROMETHEUS_PORT: "9090"
+#   ports: ["8080:8080", "9090:9090"]
+#   test:
+#     startup: { timeout: 120s }
+#     healthchecks:
+#       - { name: inference-api, type: http, url: "http://localhost:8080/health", expect_status: 200 }
+#       - { name: metrics, type: http, url: "http://localhost:9090/metrics", expect_status: 200 }
+#     sanity:
+#       - { name: model-loaded, run: "curl -sf http://localhost:8080/model/status | jq -e '.loaded'" }
+#       - { name: inference-test, run: "python scripts/test_inference.py --sample-data" }
+#       - { name: unit-tests, run: "pytest tests/ -x --tb=short" }
+#       - { name: benchmark, run: "python scripts/benchmark.py --iterations=100 --max-latency-ms=50" }
+#     teardown: always

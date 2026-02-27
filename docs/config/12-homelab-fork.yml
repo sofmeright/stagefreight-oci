@@ -11,44 +11,56 @@
 
 version: 1
 
-fork:
-  upstream: github.com/immich-app/immich
-  strategy: rebase
-  auto_sync: true
+builds:
+  - id: immich-custom
+    kind: docker
+    platforms: [linux/amd64, linux/arm64]
 
-release:
-  notes: true
+targets:
+  - id: dockerhub
+    kind: registry
+    build: immich-custom
+    url: docker.io
+    path: sofmeright/immich-custom
+    tags: ["{version}-custom", latest]
+    when: { git_tags: ["re:.*"], events: [tag] }
 
-docker:
-  platforms: [linux/amd64, linux/arm64]
-  registries:
-    - url: docker.io
-      path: sofmeright/immich-custom
-      tags: ["{version}-custom", latest]
-  rebuild:
-    schedule: daily
-    on_base_update: true
-    notify: true
+  - id: primary-release
+    kind: release
+    when: { git_tags: ["re:.*"], events: [tag] }
 
 security:
-  scan: true
-  audit_deps: true
+  enabled: true
 
-dev:
-  env:
-    DB_URL: postgres://dev:dev@db:5432/immich_dev
-    REDIS_HOSTNAME: cache
-  services:
-    db:
-      image: docker.io/library/postgres:17-alpine
-      env: { POSTGRES_USER: dev, POSTGRES_PASSWORD: dev, POSTGRES_DB: immich_dev }
-      healthcheck: { test: "pg_isready -U dev", interval: 5s }
-    cache:
-      image: docker.io/library/redis:7-alpine
-  ports: ["2283:2283"]
-  test:
-    startup: { timeout: 60s, depends_on: [db, cache] }
-    healthchecks:
-      - { name: http, type: http, url: "http://localhost:2283/api/server-info/ping", expect_status: 200 }
-
-yolo: true                            # auto-merge StageFreight MRs — I trust it
+# ── Roadmap (not yet implemented) ──────────────────────────────
+# fork:
+#   upstream: github.com/immich-app/immich
+#   strategy: rebase
+#   auto_sync: true
+#
+# rebuild:
+#   schedule: daily
+#   on_base_update: true
+#   notify: true
+#
+# security:
+#   audit_deps: true
+#
+# yolo: true
+#
+# dev:
+#   env:
+#     DB_URL: postgres://dev:dev@db:5432/immich_dev
+#     REDIS_HOSTNAME: cache
+#   services:
+#     db:
+#       image: docker.io/library/postgres:17-alpine
+#       env: { POSTGRES_USER: dev, POSTGRES_PASSWORD: dev, POSTGRES_DB: immich_dev }
+#       healthcheck: { test: "pg_isready -U dev", interval: 5s }
+#     cache:
+#       image: docker.io/library/redis:7-alpine
+#   ports: ["2283:2283"]
+#   test:
+#     startup: { timeout: 60s, depends_on: [db, cache] }
+#     healthchecks:
+#       - { name: http, type: http, url: "http://localhost:2283/api/server-info/ping", expect_status: 200 }

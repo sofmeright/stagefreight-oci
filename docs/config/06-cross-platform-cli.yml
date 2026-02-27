@@ -10,41 +10,47 @@
 
 version: 1
 
-release:
-  notes: true
-  badge: true
+policies:
+  git_tags:
+    stable: "^\\d+\\.\\d+\\.\\d+$"
 
-build:
-  artifacts:
-    - name: mycli
-      dockerfile: build/Dockerfile
-      build_args:
-        VERSION: "{version}"
-      matrix:
-        - { goos: linux,   goarch: amd64, suffix: linux-amd64 }
-        - { goos: linux,   goarch: arm64, suffix: linux-arm64 }
-        - { goos: darwin,  goarch: amd64, suffix: darwin-amd64 }
-        - { goos: darwin,  goarch: arm64, suffix: darwin-arm64 }
-        - { goos: windows, goarch: amd64, suffix: windows-amd64, ext: .exe }
-      extract:
-        - from: "/out/mycli{ext}"
-          to: "dist/mycli-{suffix}/"
-      package:
-        - type: tar.gz
-          name: "mycli-{version}-{suffix}.tar.gz"
-          contents: "dist/mycli-{suffix}/"
-          if: "goos != 'windows'"
-        - type: zip
-          name: "mycli-{version}-{suffix}.zip"
-          contents: "dist/mycli-{suffix}/"
-          if: "goos == 'windows'"
-  release_assets: true
+targets:
+  - id: primary-release
+    kind: release
+    when: { git_tags: [stable], events: [tag] }
 
-security:
-  audit_deps: true
-
-dev:
-  test:
-    sanity:
-      - { name: unit-tests, run: "go test ./... -v -count=1" }
-      - { name: lint, run: "golangci-lint run" }
+# ── Roadmap (not yet implemented) ──────────────────────────────
+# build:
+#   artifacts:
+#     - name: mycli
+#       dockerfile: build/Dockerfile
+#       build_args:
+#         VERSION: "{version}"
+#       matrix:
+#         - { goos: linux,   goarch: amd64, suffix: linux-amd64 }
+#         - { goos: linux,   goarch: arm64, suffix: linux-arm64 }
+#         - { goos: darwin,  goarch: amd64, suffix: darwin-amd64 }
+#         - { goos: darwin,  goarch: arm64, suffix: darwin-arm64 }
+#         - { goos: windows, goarch: amd64, suffix: windows-amd64, ext: .exe }
+#       extract:
+#         - from: "/out/mycli{ext}"
+#           to: "dist/mycli-{suffix}/"
+#       package:
+#         - type: tar.gz
+#           name: "mycli-{version}-{suffix}.tar.gz"
+#           contents: "dist/mycli-{suffix}/"
+#           if: "goos != 'windows'"
+#         - type: zip
+#           name: "mycli-{version}-{suffix}.zip"
+#           contents: "dist/mycli-{suffix}/"
+#           if: "goos == 'windows'"
+#   release_assets: true
+#
+# security:
+#   audit_deps: true
+#
+# dev:
+#   test:
+#     sanity:
+#       - { name: unit-tests, run: "go test ./... -v -count=1" }
+#       - { name: lint, run: "golangci-lint run" }

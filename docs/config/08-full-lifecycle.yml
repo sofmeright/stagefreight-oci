@@ -10,105 +10,143 @@
 # Why: Shows the full surface area of the manifest for a project that needs it all.
 
 version: 1
-source: true
 
-release:
-  notes: true
-  badge: true
+policies:
+  git_tags:
+    stable: "^\\d+\\.\\d+\\.\\d+$"
+  branches:
+    main: "^main$"
+    all: ".*"
 
-docker:
-  platforms: [linux/amd64, linux/arm64, linux/arm/v7]
-  registries:
-    - url: docker.io
-      path: prplanit/invoiceninja
-      tags: ["{version}", "{major}.{minor}", "{major}", latest]
-      branches: [main]
-    - url: ghcr.io
-      path: sofmeright/invoiceninja
-      tags: ["{version}", latest]
-      branches: [main]
-    - url: lscr.io
-      path: sofmeright/invoiceninja
-      tags: ["{version}-ls{build}", latest]
-      branches: [main]
-    - url: registry.prplanit.com
-      path: apps/invoiceninja
-      tags: ["{version}", "{branch}-{sha:.7}", "{branch}-latest"]
-      branches: ["*"]
-  rebuild:
-    schedule: weekly
-    on_base_update: true
-    notify: true
+builds:
+  - id: invoiceninja
+    kind: docker
+    platforms: [linux/amd64, linux/arm64, linux/arm/v7]
+
+targets:
+  # ── Docker Hub ───────────────────────────────────────────────
+  - id: dockerhub
+    kind: registry
+    build: invoiceninja
+    url: docker.io
+    path: prplanit/invoiceninja
+    tags: ["{version}", "{major}.{minor}", "{major}", latest]
+    when: { branches: [main], events: [push] }
+
+  # ── GHCR ─────────────────────────────────────────────────────
+  - id: ghcr
+    kind: registry
+    build: invoiceninja
+    url: ghcr.io
+    path: sofmeright/invoiceninja
+    tags: ["{version}", latest]
+    when: { branches: [main], events: [push] }
+
+  # ── LinuxServer.io ───────────────────────────────────────────
+  - id: lscr
+    kind: registry
+    build: invoiceninja
+    url: lscr.io
+    path: sofmeright/invoiceninja
+    tags: ["{version}", latest]
+    when: { branches: [main], events: [push] }
+
+  # ── Private registry — all branches ──────────────────────────
+  - id: private
+    kind: registry
+    build: invoiceninja
+    url: registry.prplanit.com
+    path: apps/invoiceninja
+    tags: ["{version}", "{branch}-{sha:.7}", "{branch}-latest"]
+    when: { branches: [all], events: [push] }
+
+  # ── README sync ──────────────────────────────────────────────
+  - id: dockerhub-readme
+    kind: docker-readme
+    url: docker.io
+    path: prplanit/invoiceninja
+    when: { branches: [main], events: [push, tag] }
+    file: README.md
+
+  # ── Release ──────────────────────────────────────────────────
+  - id: primary-release
+    kind: release
+    aliases: ["{version}", "{major}.{minor}", latest]
+    when: { git_tags: [stable], events: [tag] }
 
 lint:
-  level: changed                      # default — only scan what changed
+  level: changed
   modules:
-    secrets: true
-    unicode: true
-    yaml: true
-    large_files: true
-    conflicts: true
-    line_endings: true
-    tabs: true
-    dockerfile: true
-    shellcheck: true
+    secrets: { enabled: true }
+    unicode: { enabled: true }
+    tabs: { enabled: true }
+    filesize: { enabled: true }
+    conflicts: { enabled: true }
   exclude:
     - "vendor/**"
-    - "public/assets/**"              # compiled frontend assets
-
-docs:
-  readme_inputs: true
-  readme_sync: [dockerhub, ghcr]
+    - "public/assets/**"
 
 security:
-  scan: true
+  enabled: true
   sbom: true
   fail_on_critical: true
-  audit_deps: true
-  secret_findings: alert
-  codebase_audit: true                # invisible characters, Trojan Source, AI prompt injection
-  codebase_audit_threshold: warning
 
-license:
-  compliance: true
-  headers: true
-  spdx: true
-
-templates:
-  golden_files: true
-  gitignore: true
-
-dev:
-  target: dev
-  env:
-    APP_URL: http://localhost:8080
-    DB_HOST: db
-    DB_DATABASE: invoiceninja_dev
-    DB_USERNAME: dev
-    DB_PASSWORD: dev
-    REDIS_HOST: cache
-    MAIL_MAILER: log
-  services:
-    db:
-      image: docker.io/library/mariadb:11
-      env: { MYSQL_ROOT_PASSWORD: dev, MYSQL_DATABASE: invoiceninja_dev, MYSQL_USER: dev, MYSQL_PASSWORD: dev }
-      healthcheck: { test: "mariadb-admin ping -h localhost", interval: 5s }
-    cache:
-      image: docker.io/library/redis:7-alpine
-  ports: ["8080:8080"]
-  volumes:
-    - ./public:/app/public
-  test:
-    startup: { timeout: 45s, depends_on: [db, cache] }
-    healthchecks:
-      - { name: http, type: http, url: "http://localhost:8080/health", expect_status: 200 }
-    sanity:
-      - { name: migrations, run: "php artisan migrate --force" }
-      - { name: seed, run: "php artisan db:seed --class=TestSeeder" }
-      - { name: api-smoke, run: "curl -sf http://localhost:8080/api/v1/ping | jq -e '.ok'" }
-      - { name: tests, run: "php artisan test --stop-on-failure" }
-
-flair:
-  badges: auto
-
-yolo: false
+# ── Roadmap (not yet implemented) ──────────────────────────────
+# rebuild:
+#   schedule: weekly
+#   on_base_update: true
+#   notify: true
+#
+# docs:
+#   readme_inputs: true
+#   readme_sync: [dockerhub, ghcr]
+#
+# security:
+#   audit_deps: true
+#   secret_findings: alert
+#   codebase_audit: true
+#   codebase_audit_threshold: warning
+#
+# license:
+#   compliance: true
+#   headers: true
+#   spdx: true
+#
+# templates:
+#   golden_files: true
+#   gitignore: true
+#
+# flair:
+#   badges: auto
+#
+# dev:
+#   target: dev
+#   env:
+#     APP_URL: http://localhost:8080
+#     DB_HOST: db
+#     DB_DATABASE: invoiceninja_dev
+#     DB_USERNAME: dev
+#     DB_PASSWORD: dev
+#     REDIS_HOST: cache
+#     MAIL_MAILER: log
+#   services:
+#     db:
+#       image: docker.io/library/mariadb:11
+#       env: { MYSQL_ROOT_PASSWORD: dev, MYSQL_DATABASE: invoiceninja_dev, MYSQL_USER: dev, MYSQL_PASSWORD: dev }
+#       healthcheck: { test: "mariadb-admin ping -h localhost", interval: 5s }
+#     cache:
+#       image: docker.io/library/redis:7-alpine
+#   ports: ["8080:8080"]
+#   volumes:
+#     - ./public:/app/public
+#   test:
+#     startup: { timeout: 45s, depends_on: [db, cache] }
+#     healthchecks:
+#       - { name: http, type: http, url: "http://localhost:8080/health", expect_status: 200 }
+#     sanity:
+#       - { name: migrations, run: "php artisan migrate --force" }
+#       - { name: seed, run: "php artisan db:seed --class=TestSeeder" }
+#       - { name: api-smoke, run: "curl -sf http://localhost:8080/api/v1/ping | jq -e '.ok'" }
+#       - { name: tests, run: "php artisan test --stop-on-failure" }
+#
+# yolo: false

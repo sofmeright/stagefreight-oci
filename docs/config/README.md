@@ -1,6 +1,8 @@
 # `.stagefreight.yml` Example Manifests
 
-Example configurations for every project archetype. Each file is a standalone, copy-paste-ready `.stagefreight.yml` with comments explaining who it's for, what it does, and why.
+Example configurations for every project archetype. Each file is a standalone, copy-paste-ready `.stagefreight.yml` using the **v1 schema** with comments explaining who it's for, what it does, and why.
+
+Features that are planned but not yet implemented are preserved as commented `# ── Roadmap` blocks at the bottom of each file.
 
 ## Per-Repo Manifests (`.stagefreight.yml`)
 
@@ -36,13 +38,18 @@ Example configurations for every project archetype. Each file is a standalone, c
 |---|---------|-----------|
 | 24 | [daemon-config](24-daemon-config.yml) | `stagefreight serve` config — providers, org defaults, mirrors, alerts |
 
-## Manifest Complexity Gradient
+## Manifest Complexity Gradient (implemented v1 features only)
 
 ```
-4 lines    01-minimal              ← just release notes + badge
-~25 lines  04-mirror, 11-static   ← declaration + light features
-~40 lines  02-personal, 09-internal, 10-library  ← single build + dev env
-~60 lines  03-fork, 06-cli, 15-worker, 16-helm   ← focused use cases
-~80 lines  05-multi-image, 07-multi-toolchain     ← complex builds
-~100 lines 08-full, 13-compliance, 14-microservices, 19-oss  ← everything on
+~5 lines   01-minimal, 04-mirror            ← release target only
+~15 lines  06-cli, 07-multi-toolchain,      ← release + security, no builds
+           10-library, 11-static, 16-helm,
+           23-ansible
+~30 lines  02-personal, 09-internal,        ← single build + a few targets
+           12-homelab, 17-game, 18-mobile
+~50 lines  03-fork, 15-worker, 20-data,     ← build + multi-target
+           21-ml-model
+~80 lines  05-multi-image, 14-monorepo      ← multi-build + multi-target
+~100 lines 08-full, 13-compliance,          ← builds + targets + lint + security
+           19-oss, 22-s6-overlay
 ```

@@ -10,31 +10,35 @@
 
 version: 1
 
-release:
-  notes: true
-  badge: true
+targets:
+  - id: primary-release
+    kind: release
+    when: { git_tags: ["re:.*"], events: [tag] }
 
 security:
-  scan: true                          # scan for known CVEs in referenced images
-  audit_deps: true                    # check Chart.yaml dependencies
+  enabled: true
 
-license:
-  compliance: true
-
-templates:
-  golden_files: true
-  gitignore: true
-
-docs:
-  readme_inputs: true                 # generate values table from values.yaml
-
-flair:
-  badges: auto
-
-dev:
-  test:
-    sanity:
-      - { name: lint, run: "helm lint charts/my-chart" }
-      - { name: template, run: "helm template my-chart charts/my-chart --values tests/values-test.yaml" }
-      - { name: kubeval, run: "helm template my-chart charts/my-chart | kubeval --strict" }
-      - { name: package, run: "helm package charts/my-chart --destination dist/" }
+# ── Roadmap (not yet implemented) ──────────────────────────────
+# security:
+#   audit_deps: true
+#
+# license:
+#   compliance: true
+#
+# templates:
+#   golden_files: true
+#   gitignore: true
+#
+# docs:
+#   readme_inputs: true
+#
+# flair:
+#   badges: auto
+#
+# dev:
+#   test:
+#     sanity:
+#       - { name: lint, run: "helm lint charts/my-chart" }
+#       - { name: template, run: "helm template my-chart charts/my-chart --values tests/values-test.yaml" }
+#       - { name: kubeval, run: "helm template my-chart charts/my-chart | kubeval --strict" }
+#       - { name: package, run: "helm package charts/my-chart --destination dist/" }

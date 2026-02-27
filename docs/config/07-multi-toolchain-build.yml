@@ -12,47 +12,55 @@
 
 version: 1
 
-release:
-  notes: true
-  badge: true
+policies:
+  git_tags:
+    stable: "^\\d+\\.\\d+\\.\\d+$"
 
-build:
-  artifacts:
-    # Windows agent with .NET LibreHardwareMonitor wrapper
-    - name: beszel-agent-windows
-      dockerfile: build/Dockerfile.beszel-windows
-      target: export
-      platforms: [linux/amd64]         # build ON linux, cross-compile TO windows
-      build_args:
-        UPSTREAM_VERSION: "{version}"
-      extract:
-        - from: /out/beszel-agent.exe
-          to: dist/beszel-agent-windows/
-        - from: /out/*.dll
-          to: dist/beszel-agent-windows/
-      package:
-        - type: zip
-          name: "beszel-agent-windows-{version}.zip"
-          contents: dist/beszel-agent-windows/
-
-    # Linux agent (simpler — Go only, no .NET needed)
-    - name: beszel-agent-linux
-      dockerfile: build/Dockerfile.beszel-linux
-      target: export
-      matrix:
-        - { goarch: amd64, suffix: linux-amd64 }
-        - { goarch: arm64, suffix: linux-arm64 }
-      extract:
-        - from: /out/beszel-agent
-          to: "dist/beszel-agent-{suffix}/"
-      package:
-        - type: tar.gz
-          name: "beszel-agent-{version}-{suffix}.tar.gz"
-          contents: "dist/beszel-agent-{suffix}/"
-
-  release_assets: true
+targets:
+  - id: primary-release
+    kind: release
+    when: { git_tags: [stable], events: [tag] }
 
 security:
-  scan: true
-  audit_deps: true
+  enabled: true
   sbom: true
+
+# ── Roadmap (not yet implemented) ──────────────────────────────
+# build:
+#   artifacts:
+#     # Windows agent with .NET LibreHardwareMonitor wrapper
+#     - name: beszel-agent-windows
+#       dockerfile: build/Dockerfile.beszel-windows
+#       target: export
+#       platforms: [linux/amd64]
+#       build_args:
+#         UPSTREAM_VERSION: "{version}"
+#       extract:
+#         - from: /out/beszel-agent.exe
+#           to: dist/beszel-agent-windows/
+#         - from: /out/*.dll
+#           to: dist/beszel-agent-windows/
+#       package:
+#         - type: zip
+#           name: "beszel-agent-windows-{version}.zip"
+#           contents: dist/beszel-agent-windows/
+#
+#     # Linux agent (simpler — Go only, no .NET needed)
+#     - name: beszel-agent-linux
+#       dockerfile: build/Dockerfile.beszel-linux
+#       target: export
+#       matrix:
+#         - { goarch: amd64, suffix: linux-amd64 }
+#         - { goarch: arm64, suffix: linux-arm64 }
+#       extract:
+#         - from: /out/beszel-agent
+#           to: "dist/beszel-agent-{suffix}/"
+#       package:
+#         - type: tar.gz
+#           name: "beszel-agent-{version}-{suffix}.tar.gz"
+#           contents: "dist/beszel-agent-{suffix}/"
+#
+#   release_assets: true
+#
+# security:
+#   audit_deps: true

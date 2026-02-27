@@ -13,73 +13,86 @@
 
 version: 1
 
-release:
-  notes: true
-  badge: true
+policies:
+  branches:
+    main: "^main$"
 
-# API backend — standard container image
-docker:
-  dockerfile: api/Dockerfile
-  context: api
-  platforms: [linux/amd64, linux/arm64]
-  registries:
-    - url: docker.io
-      path: prplanit/myapp-api
-      tags: ["{version}", latest]
+builds:
+  # API backend — standard container image
+  - id: api
+    kind: docker
+    dockerfile: api/Dockerfile
+    context: api
+    platforms: [linux/amd64, linux/arm64]
 
-# Mobile artifacts — extracted from build containers
-build:
-  artifacts:
-    - name: android-apk
-      dockerfile: build/Dockerfile.android
-      target: export
-      platforms: [linux/amd64]
-      build_args:
-        APP_VERSION: "{version}"
-      extract:
-        - from: /out/app-release.apk
-          to: dist/android/
-      package:
-        - type: zip
-          name: "myapp-android-{version}.zip"
-          contents: dist/android/
+targets:
+  - id: dockerhub-api
+    kind: registry
+    build: api
+    url: docker.io
+    path: prplanit/myapp-api
+    tags: ["{version}", latest]
+    when: { branches: [main], events: [push] }
 
-    - name: web-bundle
-      dockerfile: build/Dockerfile.web
-      target: export
-      platforms: [linux/amd64]
-      extract:
-        - from: /out/dist/
-          to: dist/web/
-      package:
-        - type: tar.gz
-          name: "myapp-web-{version}.tar.gz"
-          contents: dist/web/
-
-  release_assets: true
+  - id: primary-release
+    kind: release
+    when: { git_tags: ["re:.*"], events: [tag] }
 
 security:
-  scan: true
-  audit_deps: true
+  enabled: true
   sbom: true
 
-dev:
-  env:
-    API_URL: http://localhost:4000
-    DATABASE_URL: postgres://dev:dev@db:5432/myapp_dev
-  services:
-    db:
-      image: docker.io/library/postgres:17-alpine
-      env: { POSTGRES_USER: dev, POSTGRES_PASSWORD: dev, POSTGRES_DB: myapp_dev }
-      healthcheck: { test: "pg_isready -U dev", interval: 5s }
-  ports: ["4000:4000", "8081:8081"]   # API + Metro bundler
-  test:
-    startup: { timeout: 30s, depends_on: [db] }
-    healthchecks:
-      - { name: api, type: http, url: "http://localhost:4000/health", expect_status: 200 }
-    sanity:
-      - { name: api-migrations, run: "cd api && npx prisma migrate deploy" }
-      - { name: api-tests, run: "cd api && npm test" }
-      - { name: app-lint, run: "cd app && npm run lint" }
-      - { name: app-typecheck, run: "cd app && npm run typecheck" }
-      - { name: app-tests, run: "cd app && npm test" }
+# ── Roadmap (not yet implemented) ──────────────────────────────
+# build:
+#   artifacts:
+#     - name: android-apk
+#       dockerfile: build/Dockerfile.android
+#       target: export
+#       platforms: [linux/amd64]
+#       build_args:
+#         APP_VERSION: "{version}"
+#       extract:
+#         - from: /out/app-release.apk
+#           to: dist/android/
+#       package:
+#         - type: zip
+#           name: "myapp-android-{version}.zip"
+#           contents: dist/android/
+#
+#     - name: web-bundle
+#       dockerfile: build/Dockerfile.web
+#       target: export
+#       platforms: [linux/amd64]
+#       extract:
+#         - from: /out/dist/
+#           to: dist/web/
+#       package:
+#         - type: tar.gz
+#           name: "myapp-web-{version}.tar.gz"
+#           contents: dist/web/
+#
+#   release_assets: true
+#
+# security:
+#   audit_deps: true
+#
+# dev:
+#   env:
+#     API_URL: http://localhost:4000
+#     DATABASE_URL: postgres://dev:dev@db:5432/myapp_dev
+#   services:
+#     db:
+#       image: docker.io/library/postgres:17-alpine
+#       env: { POSTGRES_USER: dev, POSTGRES_PASSWORD: dev, POSTGRES_DB: myapp_dev }
+#       healthcheck: { test: "pg_isready -U dev", interval: 5s }
+#   ports: ["4000:4000", "8081:8081"]
+#   test:
+#     startup: { timeout: 30s, depends_on: [db] }
+#     healthchecks:
+#       - { name: api, type: http, url: "http://localhost:4000/health", expect_status: 200 }
+#     sanity:
+#       - { name: api-migrations, run: "cd api && npx prisma migrate deploy" }
+#       - { name: api-tests, run: "cd api && npm test" }
+#       - { name: app-lint, run: "cd app && npm run lint" }
+#       - { name: app-typecheck, run: "cd app && npm run typecheck" }
+#       - { name: app-tests, run: "cd app && npm test" }

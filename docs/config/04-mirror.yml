@@ -11,10 +11,8 @@
 
 version: 1
 
-mirror_of: gitlab.prplanit.com/precisionplanit/my-project
-
-release:
-  badge: true
-
-docs:
-  readme_sync: [dockerhub]           # push README to DockerHub description
+# ── Roadmap (not yet implemented) ──────────────────────────────
+# mirror_of: gitlab.prplanit.com/precisionplanit/my-project
+#
+# docs:
+#   readme_sync: [dockerhub]

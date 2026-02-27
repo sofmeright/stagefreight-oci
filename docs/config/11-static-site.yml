@@ -12,23 +12,28 @@
 
 version: 1
 
-release:
-  notes: true
-  badge: true
-
-docs:
-  readme_inputs: true
-  readme_sync: [github]               # keep GitHub repo description current
+targets:
+  - id: primary-release
+    kind: release
+    when: { git_tags: ["re:.*"], events: [tag] }
 
 security:
-  audit_deps: true                    # scan npm/pip/gem lockfiles
+  enabled: true
 
-flair:
-  badges: auto
-
-dev:
-  test:
-    sanity:
-      - { name: install, run: "npm ci" }
-      - { name: build, run: "npm run build" }
-      - { name: link-check, run: "npx linkinator ./dist --recurse" }
+# ── Roadmap (not yet implemented) ──────────────────────────────
+# security:
+#   audit_deps: true
+#
+# docs:
+#   readme_inputs: true
+#   readme_sync: [github]
+#
+# flair:
+#   badges: auto
+#
+# dev:
+#   test:
+#     sanity:
+#       - { name: install, run: "npm ci" }
+#       - { name: build, run: "npm run build" }
+#       - { name: link-check, run: "npx linkinator ./dist --recurse" }

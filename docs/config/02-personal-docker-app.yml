@@ -9,42 +9,60 @@
 
 version: 1
 
-release:
-  notes: true
-  badge: true
+policies:
+  git_tags:
+    stable: "^\\d+\\.\\d+\\.\\d+$"
 
-docker:
-  platforms: [linux/amd64, linux/arm64]
-  registries:
-    - url: docker.io
-      path: sofmeright/my-app
-      tags: ["{version}", "{major}.{minor}", latest]
-    - url: ghcr.io
-      path: sofmeright/my-app
-      tags: ["{version}", latest]
-  rebuild:
-    on_base_update: true
+builds:
+  - id: app
+    kind: docker
+    platforms: [linux/amd64, linux/arm64]
+
+targets:
+  - id: dockerhub
+    kind: registry
+    build: app
+    url: docker.io
+    path: sofmeright/my-app
+    tags: ["{version}", "{major}.{minor}", latest]
+    when: { git_tags: [stable], events: [tag] }
+
+  - id: ghcr
+    kind: registry
+    build: app
+    url: ghcr.io
+    path: sofmeright/my-app
+    tags: ["{version}", latest]
+    when: { git_tags: [stable], events: [tag] }
+
+  - id: primary-release
+    kind: release
+    when: { git_tags: [stable], events: [tag] }
 
 security:
-  scan: true
+  enabled: true
 
-dev:
-  target: dev
-  env:
-    DATABASE_URL: postgres://dev:dev@db:5432/myapp_dev
-    LOG_LEVEL: debug
-    SECRET_KEY: dev-only-not-real
-  services:
-    db:
-      image: docker.io/library/postgres:17-alpine
-      env: { POSTGRES_USER: dev, POSTGRES_PASSWORD: dev, POSTGRES_DB: myapp_dev }
-      healthcheck: { test: "pg_isready -U dev", interval: 5s }
-  ports: ["8080:8080"]
-  volumes:
-    - ./src:/app/src
-  test:
-    startup: { timeout: 30s, depends_on: [db] }
-    healthchecks:
-      - { name: ready, type: http, url: "http://localhost:8080/health", expect_status: 200 }
-    sanity:
-      - { name: smoke, run: "curl -sf http://localhost:8080/api/status | jq -e '.ok'" }
+# ── Roadmap (not yet implemented) ──────────────────────────────
+# dev:
+#   target: dev
+#   env:
+#     DATABASE_URL: postgres://dev:dev@db:5432/myapp_dev
+#     LOG_LEVEL: debug
+#     SECRET_KEY: dev-only-not-real
+#   services:
+#     db:
+#       image: docker.io/library/postgres:17-alpine
+#       env: { POSTGRES_USER: dev, POSTGRES_PASSWORD: dev, POSTGRES_DB: myapp_dev }
+#       healthcheck: { test: "pg_isready -U dev", interval: 5s }
+#   ports: ["8080:8080"]
+#   volumes:
+#     - ./src:/app/src
+#   test:
+#     startup: { timeout: 30s, depends_on: [db] }
+#     healthchecks:
+#       - { name: ready, type: http, url: "http://localhost:8080/health", expect_status: 200 }
+#     sanity:
+#       - { name: smoke, run: "curl -sf http://localhost:8080/api/status | jq -e '.ok'" }
+#
+# rebuild:
+#   on_base_update: true
