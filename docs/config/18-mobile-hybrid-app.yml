@@ -1,15 +1,13 @@
 # .stagefreight.yml — Mobile / Hybrid App (Capacitor, React Native, Flutter)
 #
 # Who: Teams building mobile or hybrid apps. The app itself isn't a container,
-#      but the API backend might be, and the build toolchain benefits from
-#      reproducible environments.
-# What: Artifact builds for the mobile bundle (APK, IPA, web bundle), plus
-#       a container build for the API backend. Dev environment runs both
-#       the API and a mock device environment.
-# Build: Artifact build for mobile assets + Docker build for API.
-# Why: Mobile projects have complex build chains (Gradle, Xcode, Metro).
-#      Wrapping them in Dockerfiles makes them reproducible. The API backend
-#      is a standard container build.
+#      but the API backend is, and benefits from reproducible builds.
+# What: Builds the API backend as a dual-platform container image, pushes to
+#       Docker Hub, creates release notes, runs security scans with SBOM.
+#       Mobile artifact builds (APK, web bundle) are a future feature.
+# Build: Docker build for the API backend. Mobile assets built separately.
+# Why: The API backend gets the same build/push/scan pipeline as any other
+#      container. Mobile artifact builds will slot in when that feature ships.
 
 version: 1
 

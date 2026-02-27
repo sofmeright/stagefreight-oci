@@ -1,11 +1,11 @@
 # .stagefreight.yml — Personal Docker Application
 #
 # Who: Solo dev shipping a containerized side project.
-# What: Builds a single image for two platforms, pushes to Docker Hub and GHCR,
-#       has a dev environment with a database for local testing.
-# Build: Single Dockerfile with a dev stage.
-# Why: One manifest replaces a .gitlab-ci.yml build job, a docker-compose.yml
-#      for dev, and manual release note writing.
+# What: Builds a dual-platform image, pushes to Docker Hub and GHCR on
+#       semver tags, creates release notes, and runs security scans.
+# Build: Single Dockerfile, linux/amd64 + linux/arm64.
+# Why: One manifest replaces a .gitlab-ci.yml build job and manual
+#      release note writing.
 
 version: 1
 

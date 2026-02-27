@@ -3,10 +3,12 @@
 # Who: Anyone maintaining local patches on top of an upstream project.
 #      Homelab users, companies running customized open-source tools,
 #      contributors who need features upstream hasn't merged yet.
-# What: Tracks upstream, rebases local patches, audits upstream changes
-#       for suspicious commits, rebuilds the image with patches applied.
+# What: Builds a dual-platform image with -patched tags to Docker Hub on
+#       semver tags, pushes branch builds to a private registry, generates
+#       SBOM and security scans.
 # Build: Upstream's Dockerfile, your patches on top.
-# Why: Fork maintenance is manual hell. Nobody should be doing this by hand.
+# Why: Separate tagging convention ({version}-patched) makes it clear which
+#      images carry local modifications vs clean upstream.
 
 version: 1
 

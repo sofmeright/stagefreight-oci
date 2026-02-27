@@ -2,13 +2,12 @@
 #
 # Who: Documentation repos, marketing sites, blogs, wikis. Built with Hugo,
 #      Jekyll, MkDocs, Docusaurus, or plain HTML.
-# What: No container image. Focus on link checking, badge management, README
-#       sync, and flair. If the site builds via a Dockerfile (e.g., Hugo in
-#       a container), the build section can extract the static output.
-# Build: Optional — some static sites use Dockerfiles to ensure consistent
-#        build environments. Others just run `hugo build` directly.
-# Why: Even docs repos benefit from link checking, badge management, and
-#      security scanning of dependencies (npm, Python, Ruby gems).
+# What: Release notes on any git tag and security scanning of the repo
+#       (catches vulnerable npm/Python/Ruby dependencies in the build chain).
+#       No container image.
+# Build: None (container-wise).
+# Why: Even docs repos benefit from automated release notes and dependency
+#      security scanning.
 
 version: 1
 

@@ -2,11 +2,12 @@
 #
 # Who: Developers shipping a CLI binary for multiple OS/arch combos.
 #      Go, Rust, C projects that cross-compile. No container image needed.
-# What: Matrix build producing binaries for linux, macOS, and Windows.
-#       Packaged as tar.gz (unix) and zip (windows). Attached to git releases.
-# Build: Dockerfile defines the toolchain, output is extracted artifacts.
-# Why: Replaces a 100-line CI script with a declarative manifest. Devs run
-#      `stagefreight build` locally and get the same artifacts CI produces.
+# What: Creates release notes on semver tags. Today this is the minimal
+#       useful manifest for a non-Docker project. When artifact builds land,
+#       this config will gain matrix builds, packaging, and release assets.
+# Build: None (container-wise). Artifact builds are a future feature.
+# Why: Establishes the manifest so release notes work now, and artifact
+#      builds slot in without restructuring when the feature ships.
 
 version: 1
 

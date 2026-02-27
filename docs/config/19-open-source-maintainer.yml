@@ -1,14 +1,14 @@
 # .stagefreight.yml — Open Source Maintainer
 #
 # Who: Maintainers of popular open-source projects with a community. Multiple
-#      registries for maximum distribution. Community contribution workflow.
-#      Public security posture. Documentation quality matters.
-# What: Multi-platform images on every major registry. Full security scanning
-#       with public SBOM. README sync to every registry. Flair management.
-#       Changelog maintenance for contributors.
-# Build: Multi-platform image distributed everywhere the community expects.
-# Why: Open source maintainers do 80% maintenance, 20% coding. StageFreight
-#      automates the maintenance so they can focus on code.
+#      registries for maximum distribution.
+# What: Three-platform image pushed to Docker Hub, GHCR, and Quay — covering
+#       every major container registry. README sync to Docker Hub. Full
+#       security scanning with SBOM and fail_on_critical. Release with
+#       rolling semver tag aliases.
+# Build: Multi-platform image (amd64, arm64, arm/v7) for maximum reach.
+# Why: Open source users pull from different registries. One manifest pushes
+#      everywhere, syncs the README, and generates security artifacts.
 
 version: 1
 

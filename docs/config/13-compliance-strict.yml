@@ -2,12 +2,14 @@
 #
 # Who: Teams in regulated industries — healthcare, finance, government,
 #      defense contractors. Compliance is mandatory, not optional.
-# What: Every security and license feature turned on and set to fail.
-#       SBOM generation is required. License headers are enforced.
-#       Secret scanning alerts go to the security team. No YOLO.
-# Build: Locked-down image with provenance tracking.
-# Why: Auditors want proof. StageFreight generates the artifacts they need —
-#      SBOMs, license reports, dependency audits, signed builds — automatically.
+# What: Every implemented security feature turned on and set to fail.
+#       SBOM generation required. Full lint suite with strict file size
+#       limits. Builds push to a private registry only — no public exposure.
+# Build: Single-platform image pushed to private registry from main and
+#       release/* branches.
+# Why: Auditors want proof. StageFreight generates SBOMs and runs security
+#      scans automatically. Lint catches secrets, merge conflicts, and
+#      suspicious unicode before they reach production.
 
 version: 1
 

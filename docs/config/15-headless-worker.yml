@@ -2,12 +2,13 @@
 #
 # Who: Services with no HTTP interface. Queue consumers, cron jobs, Discord
 #      bots, data pipelines, ETL workers, event processors.
-# What: Builds and pushes a container image, but dev testing is different —
-#       no HTTP healthchecks, just process-level checks and queue connectivity.
-# Build: Standard Dockerfile, single image.
-# Why: Not every service has a /health endpoint. Workers need a different
-#      testing strategy — verify the process starts, connects to its deps,
-#      processes a test message, and exits cleanly.
+# What: Dual-platform image pushed to Docker Hub on semver tags and to a
+#       private registry on every branch push with branch-sha tags. Release
+#       notes and security scanning.
+# Build: Standard Dockerfile, dual-platform (amd64 + arm64).
+# Why: Workers follow the same build/push lifecycle as HTTP services. The
+#      dual-target pattern (public release + private branch builds) is common
+#      for services that need testing before a stable tag.
 
 version: 1
 

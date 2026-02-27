@@ -1,14 +1,13 @@
 # .stagefreight.yml — Data Pipeline / ETL
 #
 # Who: Data engineering teams building pipelines — Spark jobs, Airflow DAGs,
-#      dbt models, custom ETL scripts. May produce container images for
-#      the pipeline runtime, or just artifacts (SQL bundles, compiled models).
-# What: Container image for the pipeline executor. Extensive testing with
-#       mock data sources. Dev environment simulates the full data stack.
-# Build: Dockerfile with heavy Python/Java/Scala dependencies.
-# Why: Data pipelines are notoriously hard to test locally. A manifest that
-#      spins up mock databases, message queues, and object stores means
-#      contributors can validate changes without access to production data.
+#      dbt models, custom ETL scripts.
+# What: Builds the pipeline executor image, pushes to a private registry on
+#       every branch with version and branch-sha tags. Creates release notes.
+#       Security scanning catches vulnerable Python/Java dependencies.
+# Build: Dockerfile with heavy Python/Java/Scala dependencies, single platform.
+# Why: Pipeline images change frequently and need branch-level builds so
+#      data engineers can test changes before merging.
 
 version: 1
 

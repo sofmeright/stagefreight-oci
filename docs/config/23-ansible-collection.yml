@@ -1,13 +1,13 @@
 # .stagefreight.yml — Ansible Collection / Automation Repo
 #
 # Who: Teams maintaining Ansible collections, roles, or playbook repos.
-#      No container image — the deliverable is the collection itself,
-#      published to Ansible Galaxy or a private automation hub.
-# What: Linting, testing with molecule, packaging, and publishing. Security
-#       scanning of any embedded scripts or dependencies.
-# Build: None (container-wise). The artifact is the collection tarball.
-# Why: Ansible repos need the same hygiene as any other codebase — release
-#      notes, security scanning, lint enforcement, golden file sync.
+#      No container image — the deliverable is the collection itself.
+# What: Release notes on any git tag and security scanning of the repo.
+#       No container build. Testing with molecule and Galaxy publishing
+#       are future features.
+# Build: None (container-wise).
+# Why: Ansible repos benefit from automated release notes and security
+#      scanning of embedded scripts and Python dependencies.
 
 version: 1
 

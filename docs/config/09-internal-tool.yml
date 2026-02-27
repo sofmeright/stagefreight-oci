@@ -2,11 +2,12 @@
 #
 # Who: A team building internal tooling that never leaves the org. Private
 #      registry only, no public push, no public docs sync.
-# What: Builds to a single private registry. Dev environment for the team.
-#       Security scanning but no public-facing compliance.
-# Build: Single Dockerfile, single registry, all branches push.
+# What: Builds to a single private registry on every branch push. Branch
+#       tags for feature branch testing, semver tags on release. Security
+#       scanning enabled.
+# Build: Single Dockerfile, single platform, single registry.
 # Why: Not everything is public. Internal tools need the same build
-#      reproducibility and dev experience without the multi-registry overhead.
+#      reproducibility without the multi-registry overhead.
 
 version: 1
 

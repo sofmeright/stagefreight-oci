@@ -2,13 +2,13 @@
 #
 # Who: Projects that need multiple language toolchains to produce a single
 #      artifact. Go + .NET, Rust + C FFI, Java + native libraries, etc.
-# What: A Dockerfile with multiple FROM stages — each stage brings its own
-#       SDK. Artifacts flow between stages via COPY --from. Final stage
-#       collects everything for extraction.
-# Build: Complex multistage Dockerfile. Output is files, not a container.
-# Why: This was a 50-line CI script with apt-get install and wget. Now it's
-#      a cached, reproducible Dockerfile that works identically on a dev
-#      laptop and in CI.
+# What: Creates release notes on semver tags and runs security scanning
+#       with SBOM. Today this is the minimal manifest for a non-Docker
+#       project with security requirements. When artifact builds land,
+#       this config will gain multistage extraction and release assets.
+# Build: None (container-wise). Artifact builds are a future feature.
+# Why: Establishes the manifest with security scanning now, and artifact
+#      builds slot in without restructuring when the feature ships.
 
 version: 1
 

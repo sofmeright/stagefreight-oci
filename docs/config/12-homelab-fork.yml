@@ -1,13 +1,12 @@
 # .stagefreight.yml — Homelab Self-Hosted Fork
 #
 # Who: Homelab users running customized versions of popular self-hosted apps.
-#      You forked Immich/Jellyfin/Paperless to add a feature or patch a bug,
-#      and you want it to stay current without manual rebasing every week.
-# What: Fork tracking with auto-sync, auto-rebuild on upstream changes,
-#       YOLO auto-merge because you're the only user and you trust the process.
+#      You forked Immich/Jellyfin/Paperless to add a feature or patch a bug.
+# What: Builds a dual-platform image with -custom tags, pushes to Docker Hub,
+#       creates release notes, runs security scans. Simple and functional.
 # Build: Upstream's Dockerfile with your patches. Pushed to your personal registry.
-# Why: The homelab dream — fork it, patch it, forget it. StageFreight keeps
-#      it current and rebuilds it automatically.
+# Why: Enough automation that tagging a release builds, pushes, and documents
+#      the image without manual steps.
 
 version: 1
 

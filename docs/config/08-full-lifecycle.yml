@@ -1,15 +1,20 @@
 # .stagefreight.yml — Full Lifecycle (Business/Public Project)
 #
-# Who: A business shipping a public-facing application. Multiple registries
-#      with vendor-specific tag conventions. Full security and compliance.
-#      Scheduled rebuilds. Everything turned on.
-# What: The "everything" manifest. Every feature StageFreight offers, configured
-#       for a real production application.
-# Build: Multi-platform image pushed to Docker Hub, GHCR, LinuxServer.io,
-#        and a private registry.
-# Why: Shows the full surface area of the manifest for a project that needs it all.
+# Who: A business shipping a public-facing application. Multiple registries,
+#      full security and lint, README sync. Every implemented v1 feature
+#      turned on.
+# What: The "everything" manifest. Multi-platform image pushed to Docker Hub,
+#       GHCR, Quay, and a private registry. Rolling semver tags. README sync
+#       to Docker Hub. Full lint suite. Security scanning with SBOM. Release
+#       with rolling git tag aliases.
+# Build: Three-platform image (amd64, arm64, arm/v7) for maximum reach.
+# Why: Shows the full implemented surface area of the v1 manifest.
 
 version: 1
+
+vars:
+  org: prplanit
+  app: invoiceninja
 
 policies:
   git_tags:
@@ -29,44 +34,54 @@ targets:
     kind: registry
     build: invoiceninja
     url: docker.io
-    path: prplanit/invoiceninja
+    provider: docker
+    path: "{var:org}/{var:app}"
     tags: ["{version}", "{major}.{minor}", "{major}", latest]
     when: { branches: [main], events: [push] }
+    credentials: DOCKER
 
   # ── GHCR ─────────────────────────────────────────────────────
   - id: ghcr
     kind: registry
     build: invoiceninja
     url: ghcr.io
-    path: sofmeright/invoiceninja
+    path: sofmeright/{var:app}
     tags: ["{version}", latest]
     when: { branches: [main], events: [push] }
+    credentials: GHCR
 
-  # ── LinuxServer.io ───────────────────────────────────────────
-  - id: lscr
+  # ── Quay.io ─────────────────────────────────────────────────
+  - id: quay
     kind: registry
     build: invoiceninja
-    url: lscr.io
-    path: sofmeright/invoiceninja
+    url: quay.io
+    path: "{var:org}/{var:app}"
     tags: ["{version}", latest]
     when: { branches: [main], events: [push] }
+    credentials: QUAY
 
   # ── Private registry — all branches ──────────────────────────
   - id: private
     kind: registry
     build: invoiceninja
     url: registry.prplanit.com
-    path: apps/invoiceninja
+    path: "apps/{var:app}"
     tags: ["{version}", "{branch}-{sha:.7}", "{branch}-latest"]
     when: { branches: [all], events: [push] }
+    credentials: PRIVATE_REG
+    retention:
+      keep_last: 10
+      protect: ["{branch}-latest"]
 
   # ── README sync ──────────────────────────────────────────────
   - id: dockerhub-readme
     kind: docker-readme
     url: docker.io
-    path: prplanit/invoiceninja
+    path: "{var:org}/{var:app}"
+    credentials: DOCKER
     when: { branches: [main], events: [push, tag] }
     file: README.md
+    description: "Self-hosted invoicing — multi-platform image with full security scanning"
 
   # ── Release ──────────────────────────────────────────────────
   - id: primary-release

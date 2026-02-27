@@ -1,14 +1,14 @@
 # .stagefreight.yml — Machine Learning Model Serving
 #
 # Who: ML/AI teams shipping model inference services. Large images with
-#      GPU dependencies. Model artifacts alongside the serving container.
-# What: Container image for the inference server, plus model artifact
-#       extraction for standalone deployment. GPU-specific platform builds.
-# Build: Heavy Dockerfile (PyTorch/TensorFlow base, model weights baked in
-#        or downloaded at build time).
-# Why: ML images are huge and slow to build. Caching matters enormously.
-#      Reproducible builds mean you can trace exactly which model weights
-#      and code version produced a given prediction.
+#      GPU dependencies.
+# What: Builds the inference server image with CUDA version and model version
+#       as build args. Pushes to a private registry and Docker Hub. Security
+#       scanning with SBOM tracks the dependency chain (PyTorch, CUDA, etc.).
+# Build: Heavy Dockerfile (PyTorch/TensorFlow base), single platform (amd64).
+# Why: ML images are huge — build args let you pin CUDA and model versions
+#      for reproducibility. SBOM tracks the full dependency chain so you can
+#      trace exactly which versions produced a given prediction.
 
 version: 1
 

@@ -2,14 +2,12 @@
 #
 # Who: Maintainers of libraries published to package registries — npm, PyPI,
 #      crates.io, Go modules, NuGet. No Docker image, no container build.
-# What: Security scanning of dependencies, license compliance, SBOM generation,
-#       release notes, and badge management. Build is handled by the language's
-#       native toolchain — StageFreight doesn't replace `npm publish` or
-#       `cargo publish`, it handles everything around it.
-# Build: None (container-wise). The library's own build/test toolchain runs
-#        via dev.test.sanity checks.
-# Why: Libraries need the same stewardship as applications — dependency auditing,
-#      license checking, changelog maintenance — but they don't produce images.
+# What: Release notes on any git tag and security scanning with SBOM. The
+#       library's own toolchain handles `npm publish` / `cargo publish` —
+#       StageFreight handles release notes and security posture.
+# Build: None (container-wise).
+# Why: Libraries don't produce images but still benefit from automated release
+#      notes and dependency security scanning.
 
 version: 1
 
