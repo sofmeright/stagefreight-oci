@@ -190,6 +190,15 @@ func commitReadme(rootDir, readmePath, content string) error {
 	}
 
 	branch := cdBranch
+	if branch == "" {
+		branch = os.Getenv("CI_COMMIT_BRANCH")
+	}
+	if branch == "" {
+		branch = os.Getenv("CI_DEFAULT_BRANCH")
+	}
+	if branch == "" {
+		return fmt.Errorf("no branch specified: use --branch or set CI_COMMIT_BRANCH")
+	}
 
 	if err := forgeClient.CommitFile(ctx, forge.CommitFileOptions{
 		Branch:  branch,

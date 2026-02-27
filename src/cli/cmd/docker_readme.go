@@ -163,7 +163,7 @@ func syncReadmeCollect(ctx context.Context, readmeCfg config.DockerReadmeConfig,
 
 		if err != nil {
 			if registry.IsForbidden(err) {
-				results = append(results, readmeSyncResult{Registry: name, Status: "skipped", Detail: "forbidden (PAT cannot update descriptions; use password with 2FA disabled)"})
+				results = append(results, readmeSyncResult{Registry: name, Status: "skipped", Detail: "forbidden (ensure PAT has read/write/delete scope at https://hub.docker.com/settings/security)"})
 				continue
 			}
 			results = append(results, readmeSyncResult{Registry: name, Status: "failed", Detail: err.Error(), Err: err})
