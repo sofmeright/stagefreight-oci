@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -124,12 +125,19 @@ func runComponentDocs(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("section markers <!-- sf:%s --> not found in %s", sectionName, target)
 		}
 
-		if err := os.WriteFile(target, []byte(updated), 0o644); err != nil {
-			return fmt.Errorf("writing %s: %w", target, err)
+		// Normalize line endings and trailing newline for comparison.
+		existingNorm := normalizeContent(string(existing))
+		updatedNorm := normalizeContent(updated)
+		unchanged := existingNorm == updatedNorm
+
+		if !unchanged {
+			if err := os.WriteFile(target, []byte(updated), 0o644); err != nil {
+				return fmt.Errorf("writing %s: %w", target, err)
+			}
 		}
 
-		// Optionally commit via forge API
-		if cdCommit {
+		// Optionally commit via forge API — skip if content is unchanged.
+		if cdCommit && !unchanged {
 			rootDir, err := os.Getwd()
 			if err != nil {
 				return fmt.Errorf("getting working directory: %w", err)
@@ -144,10 +152,16 @@ func runComponentDocs(cmd *cobra.Command, args []string) error {
 		w := os.Stdout
 		sec := output.NewSection(w, "Component Docs", elapsed, useColor)
 		sec.Row("%-16s%d inputs from %d spec(s)", "parsed", totalInputs, len(specs))
-		status := "success"
-		detail := "updated"
-		if cdCommit {
-			detail = "updated + committed"
+		var status, detail string
+		if unchanged {
+			status = "skipped"
+			detail = "unchanged"
+		} else {
+			status = "success"
+			detail = "updated"
+			if cdCommit {
+				detail = "updated + committed"
+			}
 		}
 		output.RowStatus(sec, target, detail, status, useColor)
 		sec.Close()
@@ -200,15 +214,30 @@ func commitReadme(rootDir, readmePath, content string) error {
 		return fmt.Errorf("no branch specified: use --branch or set CI_COMMIT_BRANCH")
 	}
 
+	commitMsg := "docs: update component input documentation"
+	if os.Getenv("CI") != "" || os.Getenv("GITLAB_CI") != "" {
+		commitMsg += " [skip ci]"
+	}
+
 	if err := forgeClient.CommitFile(ctx, forge.CommitFileOptions{
 		Branch:  branch,
 		Path:    readmePath,
 		Content: []byte(content),
-		Message: "docs: update component input documentation",
+		Message: commitMsg,
 	}); err != nil {
 		return fmt.Errorf("committing README: %w", err)
 	}
 
 	fmt.Printf("  docs %s → %s on %s\n", colorGreen("✓"), readmePath, branch)
 	return nil
+}
+
+// normalizeContent normalizes line endings (CRLF → LF) and ensures a trailing newline
+// for reliable content comparison.
+func normalizeContent(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	if s != "" && !strings.HasSuffix(s, "\n") {
+		s += "\n"
+	}
+	return s
 }
