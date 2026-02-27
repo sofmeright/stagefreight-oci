@@ -29,6 +29,7 @@ var (
 	dbPlatforms []string
 	dbTags      []string
 	dbTarget    string
+	dbBuildID   string
 	dbSkipLint  bool
 	dbDryRun    bool
 )
@@ -48,6 +49,7 @@ func init() {
 	dockerBuildCmd.Flags().StringSliceVar(&dbPlatforms, "platform", nil, "override platforms (comma-separated)")
 	dockerBuildCmd.Flags().StringSliceVar(&dbTags, "tag", nil, "override/add tags")
 	dockerBuildCmd.Flags().StringVar(&dbTarget, "target", "", "override Dockerfile target stage")
+	dockerBuildCmd.Flags().StringVar(&dbBuildID, "build", "", "build a specific entry by ID (default: all)")
 	dockerBuildCmd.Flags().BoolVar(&dbSkipLint, "skip-lint", false, "skip pre-build lint")
 	dockerBuildCmd.Flags().BoolVar(&dbDryRun, "dry-run", false, "show the plan without executing")
 
@@ -69,9 +71,9 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 	w := os.Stdout
 	pipelineStart := time.Now()
 
-	// Inject project description from config for {project.description} templates
-	if cfg.Docker.Readme.Description != "" {
-		gitver.SetProjectDescription(cfg.Docker.Readme.Description)
+	// Inject project description from docker-readme targets for {project.description} templates
+	if desc := firstDockerReadmeDescription(cfg); desc != "" {
+		gitver.SetProjectDescription(desc)
 	}
 
 	// Banner — StageFreight's own identity from build-time ldflags
@@ -131,22 +133,32 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 	output.SectionStartCollapsed(w, "sf_plan", "Plan")
 	planStart := time.Now()
 
-	dockerCfg := cfg.Docker
-
-	// Apply CLI overrides
-	if dbTarget != "" {
-		dockerCfg.Target = dbTarget
-	}
-	if len(dbPlatforms) > 0 {
-		dockerCfg.Platforms = dbPlatforms
-	}
-	if dbLocal {
-		if len(dockerCfg.Platforms) == 0 {
-			dockerCfg.Platforms = []string{fmt.Sprintf("linux/%s", runtime.GOARCH)}
+	// Apply CLI overrides to builds
+	planCfg := *cfg
+	if dbTarget != "" || len(dbPlatforms) > 0 || dbLocal {
+		builds := make([]config.BuildConfig, len(planCfg.Builds))
+		copy(builds, planCfg.Builds)
+		for i := range builds {
+			if builds[i].Kind != "docker" {
+				continue
+			}
+			if dbBuildID != "" && builds[i].ID != dbBuildID {
+				continue
+			}
+			if dbTarget != "" {
+				builds[i].Target = dbTarget
+			}
+			if len(dbPlatforms) > 0 {
+				builds[i].Platforms = dbPlatforms
+			}
+			if dbLocal && len(builds[i].Platforms) == 0 {
+				builds[i].Platforms = []string{fmt.Sprintf("linux/%s", runtime.GOARCH)}
+			}
 		}
+		planCfg.Builds = builds
 	}
 
-	plan, err := engine.Plan(ctx, &engines.ImagePlanInput{Docker: &dockerCfg, Policy: cfg.Git.Policy}, det)
+	plan, err := engine.Plan(ctx, &engines.ImagePlanInput{Cfg: &planCfg, BuildID: dbBuildID}, det)
 	if err != nil {
 		output.SectionEnd(w, "sf_plan")
 		return fmt.Errorf("planning: %w", err)
@@ -174,6 +186,7 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 				step.Tags = []string{"stagefreight:dev"}
 			}
 		} else if len(step.Registries) == 0 {
+			// No registries configured — load locally
 			step.Load = true
 			if len(step.Tags) == 0 {
 				step.Tags = []string{"stagefreight:dev"}
@@ -208,13 +221,14 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 	}
 
 	planSec := output.NewSection(w, "Plan", planElapsed, color)
+	planSec.Row("%-16s%s", "builds", fmt.Sprintf("%d", len(plan.Steps)))
 	planSec.Row("%-16s%s", "platforms", formatPlatforms(plan.Steps))
 	planSec.Row("%-16s%s", "tags", strings.Join(tagNames, ", "))
 	planSec.Row("%-16s%s", "strategy", strategy)
 	planSec.Close()
 	output.SectionEnd(w, "sf_plan")
 
-	planSummary := fmt.Sprintf("%s, %d tag(s), %s", formatPlatforms(plan.Steps), tagCount, strategy)
+	planSummary := fmt.Sprintf("%d build(s), %s, %d tag(s), %s", len(plan.Steps), formatPlatforms(plan.Steps), tagCount, strategy)
 
 	// --- Dry run ---
 	if dbDryRun {
@@ -248,7 +262,7 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 		bx.Stderr = &stderrBuf
 	}
 
-	// Login to remote registries (suppress raw output)
+	// Login to remote registries (suppress raw output — structured section handles display)
 	for _, step := range plan.Steps {
 		if hasRemoteRegistries(step.Registries) {
 			loginBx := *bx
@@ -262,7 +276,7 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Build each step — always parse layers for structured output
+	// Build each step — always use BuildWithLayers for structured layer output
 	var result build.BuildResult
 	for _, step := range plan.Steps {
 		stepResult, layers, err := bx.BuildWithLayers(ctx, step)
@@ -365,8 +379,9 @@ func runDockerBuild(cmd *cobra.Command, args []string) error {
 
 	// --- README Sync ---
 	var readmeSummary string
-	if cfg.Docker.Readme.IsActive() && !dbLocal {
-		readmeSummary, _ = runReadmeSyncSection(ctx, w, ci, color, cfg.Docker.Readme, cfg.Docker.Registries, rootDir)
+	readmeTargets := collectTargetsByKind(cfg, "docker-readme")
+	if len(readmeTargets) > 0 && !dbLocal {
+		readmeSummary, _ = runReadmeSyncSection(ctx, w, ci, color, readmeTargets, rootDir)
 	}
 
 	// --- Retention ---
@@ -637,18 +652,21 @@ func formatPlatforms(steps []build.BuildStep) string {
 	if len(steps) == 0 {
 		return ""
 	}
-	platforms := steps[0].Platforms
+	// Collect unique platforms across all steps
+	seen := make(map[string]bool)
+	var platforms []string
+	for _, s := range steps {
+		for _, p := range s.Platforms {
+			if !seen[p] {
+				seen[p] = true
+				platforms = append(platforms, p)
+			}
+		}
+	}
 	if len(platforms) == 0 {
 		return runtime.GOOS + "/" + runtime.GOARCH
 	}
-	result := ""
-	for i, p := range platforms {
-		if i > 0 {
-			result += ","
-		}
-		result += p
-	}
-	return result
+	return strings.Join(platforms, ",")
 }
 
 // buildContextKV returns key-value pairs for the pipeline context block.
@@ -681,18 +699,18 @@ func buildContextKV() []output.KV {
 		kv = append(kv, output.KV{Key: "Platforms", Value: platforms})
 	}
 
-	// Count configured registries
-	regCount := len(cfg.Docker.Registries)
-	if regCount > 0 {
+	// Count configured registry targets
+	regTargets := collectTargetsByKind(cfg, "registry")
+	if len(regTargets) > 0 {
 		var regNames []string
 		seen := make(map[string]bool)
-		for _, r := range cfg.Docker.Registries {
-			if !seen[r.URL] {
-				regNames = append(regNames, r.URL)
-				seen[r.URL] = true
+		for _, t := range regTargets {
+			if !seen[t.URL] {
+				regNames = append(regNames, t.URL)
+				seen[t.URL] = true
 			}
 		}
-		kv = append(kv, output.KV{Key: "Registries", Value: fmt.Sprintf("%d (%s)", regCount, strings.Join(regNames, ", "))})
+		kv = append(kv, output.KV{Key: "Registries", Value: fmt.Sprintf("%d (%s)", len(regTargets), strings.Join(regNames, ", "))})
 	}
 
 	return kv
@@ -700,12 +718,10 @@ func buildContextKV() []output.KV {
 
 // hasNarratorBadgeItems returns true if any narrator item has badge generation configured.
 func hasNarratorBadgeItems() bool {
-	for _, f := range cfg.Git.Narrator.Files {
-		for _, s := range f.Sections {
-			for _, item := range s.Items {
-				if item.HasGeneration() {
-					return true
-				}
+	for _, f := range cfg.Narrator {
+		for _, item := range f.Items {
+			if item.HasGeneration() {
+				return true
 			}
 		}
 	}
@@ -715,12 +731,10 @@ func hasNarratorBadgeItems() bool {
 // collectNarratorBadgeItems returns all narrator items with badge generation.
 func collectNarratorBadgeItems() []config.NarratorItem {
 	var items []config.NarratorItem
-	for _, f := range cfg.Git.Narrator.Files {
-		for _, s := range f.Sections {
-			for _, item := range s.Items {
-				if item.HasGeneration() {
-					items = append(items, item)
-				}
+	for _, f := range cfg.Narrator {
+		for _, item := range f.Items {
+			if item.HasGeneration() {
+				items = append(items, item)
 			}
 		}
 	}
@@ -729,11 +743,10 @@ func collectNarratorBadgeItems() []config.NarratorItem {
 
 // runBadgeSection generates configured badges with section-formatted output.
 func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Duration) {
-	defaults := cfg.Git.Narrator.Badges
 	output.SectionStartCollapsed(w, "sf_badges", "Badges")
 	start := time.Now()
 
-	eng, err := buildBadgeEngine(defaults)
+	eng, err := buildDefaultBadgeEngine()
 	if err != nil {
 		elapsed := time.Since(start)
 		sec := output.NewSection(w, "Badges", elapsed, color)
@@ -767,7 +780,7 @@ func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Dura
 		// Per-item engine if font is overridden
 		itemEng := eng
 		if spec.Font != "" || spec.FontFile != "" || spec.FontSize != 0 {
-			override, oErr := buildItemEngine(spec, defaults)
+			override, oErr := buildItemEngine(spec)
 			if oErr != nil {
 				continue
 			}
@@ -777,7 +790,7 @@ func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Dura
 		// Resolve value templates
 		value := spec.Value
 		if vi != nil && value != "" {
-			value = gitver.ResolveTemplateWithDir(value, vi, rootDir)
+			value = gitver.ResolveTemplateWithDirAndVars(value, vi, rootDir, cfg.Vars)
 		}
 		value = gitver.ResolveDockerTemplates(value, dockerInfo)
 
@@ -808,15 +821,9 @@ func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Dura
 		spec := item.ToBadgeSpec()
 		fontName := spec.Font
 		if fontName == "" {
-			fontName = defaults.Font
-		}
-		if fontName == "" {
 			fontName = "dejavu-sans"
 		}
 		size := spec.FontSize
-		if size == 0 {
-			size = defaults.FontSize
-		}
 		if size == 0 {
 			size = 11
 		}
@@ -824,7 +831,7 @@ func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Dura
 		if badgeColor == "" {
 			badgeColor = "auto"
 		}
-		sec.Row("%-16s%-24s %-8s %.0fpt  %s", item.Badge, spec.Output, fontName, size, badgeColor)
+		sec.Row("%-16s%-24s %-8s %.0fpt  %s", item.Text, spec.Output, fontName, size, badgeColor)
 	}
 	sec.Close()
 	output.SectionEnd(w, "sf_badges")
@@ -833,34 +840,52 @@ func runBadgeSection(w io.Writer, color bool, rootDir string) (string, time.Dura
 	return summary, elapsed
 }
 
-// runReadmeSyncSection wraps readme sync with section-formatted output.
-func runReadmeSyncSection(ctx context.Context, w io.Writer, _ bool, color bool, readmeCfg config.DockerReadmeConfig, registries []config.RegistryConfig, rootDir string) (string, time.Duration) {
+// runReadmeSyncSection syncs README to docker-readme targets with section-formatted output.
+func runReadmeSyncSection(ctx context.Context, w io.Writer, _ bool, color bool, targets []config.TargetConfig, rootDir string) (string, time.Duration) {
 	output.SectionStartCollapsed(w, "sf_readme", "README Sync")
 	start := time.Now()
 
-	content, err := registry.PrepareReadme(readmeCfg, rootDir)
-	if err != nil {
-		elapsed := time.Since(start)
-		sec := output.NewSection(w, "Readme", elapsed, color)
-		sec.Row("error: %v", err)
-		sec.Close()
-		output.SectionEnd(w, "sf_readme")
-		return fmt.Sprintf("error: %v", err), elapsed
+	var synced, errors int
+
+	for _, t := range targets {
+		file := t.File
+		if file == "" {
+			file = "README.md"
+		}
+
+		content, err := registry.PrepareReadmeFromFile(file, t.Description, t.LinkBase, rootDir)
+		if err != nil {
+			errors++
+			continue
+		}
+
+		provider := t.Provider
+		if provider == "" {
+			provider = build.DetectProvider(t.URL)
+		}
+
+		client, err := registry.NewRegistry(provider, t.URL, t.Credentials)
+		if err != nil {
+			errors++
+			continue
+		}
+
+		short := content.Short
+		if t.Description != "" {
+			short = t.Description
+		}
+
+		if err := client.UpdateDescription(ctx, t.Path, short, content.Full); err != nil {
+			errors++
+			continue
+		}
+		synced++
 	}
 
-	synced, _, errors := syncReadmeToRegistries(ctx, w, readmeCfg, registries, content)
 	elapsed := time.Since(start)
-
 	sec := output.NewSection(w, "Readme", elapsed, color)
-	for _, reg := range registries {
-		provider := "generic"
-		if p, err := registry.CanonicalProvider(reg.Provider); err == nil {
-			provider = p
-		}
-		switch provider {
-		case "docker", "github", "quay", "harbor":
-			sec.Row("%-40ssynced", reg.URL+"/"+reg.Path)
-		}
+	for _, t := range targets {
+		sec.Row("%-40ssynced", t.URL+"/"+t.Path)
 	}
 	sec.Close()
 	output.SectionEnd(w, "sf_readme")
@@ -869,7 +894,6 @@ func runReadmeSyncSection(ctx context.Context, w io.Writer, _ bool, color bool, 
 	if errors > 0 {
 		summary += fmt.Sprintf(", %d error(s)", errors)
 	}
-
 	return summary, elapsed
 }
 
@@ -900,15 +924,37 @@ func renderBuildLayers(sec *output.Section, steps []build.StepResult, color bool
 	return hasLayers
 }
 
-// dockerHubFromConfig returns the namespace and repo for the first docker.io registry.
+// dockerHubFromConfig returns the namespace and repo for the first docker.io registry target.
 func dockerHubFromConfig() (string, string) {
-	for _, reg := range cfg.Docker.Registries {
-		if reg.URL == "docker.io" && reg.Path != "" {
-			parts := strings.SplitN(reg.Path, "/", 2)
+	for _, t := range cfg.Targets {
+		if t.Kind == "registry" && t.URL == "docker.io" && t.Path != "" {
+			resolved := gitver.ResolveVars(t.Path, cfg.Vars)
+			parts := strings.SplitN(resolved, "/", 2)
 			if len(parts) == 2 {
 				return parts[0], parts[1]
 			}
 		}
 	}
 	return "", ""
+}
+
+// collectTargetsByKind returns all targets matching the given kind.
+func collectTargetsByKind(cfg *config.Config, kind string) []config.TargetConfig {
+	var targets []config.TargetConfig
+	for _, t := range cfg.Targets {
+		if t.Kind == kind {
+			targets = append(targets, t)
+		}
+	}
+	return targets
+}
+
+// firstDockerReadmeDescription returns the description from the first docker-readme target.
+func firstDockerReadmeDescription(cfg *config.Config) string {
+	for _, t := range cfg.Targets {
+		if t.Kind == "docker-readme" && t.Description != "" {
+			return t.Description
+		}
+	}
+	return ""
 }

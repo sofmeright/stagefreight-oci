@@ -32,7 +32,7 @@ var narratorComposeCmd = &cobra.Command{
 
 Items are specified as type:value pairs with optional comma-separated fields:
 
-  badge:<alt>,file:<path>,link:<url>
+  badge:<label>,output:<path>,link:<url>
   shield:<path>,link:<url>,label:<text>
   text:<markdown content>
   component:<spec-file-path>
@@ -40,7 +40,7 @@ Items are specified as type:value pairs with optional comma-separated fields:
 
 Examples:
   stagefreight narrator compose -f README.md -s badges \
-    badge:release,file:.stagefreight/badges/release.svg,link:https://github.com/myorg/myrepo/releases \
+    badge:release,output:.stagefreight/badges/release.svg,link:https://github.com/myorg/myrepo/releases \
     shield:docker/pulls/myorg/myrepo,link:https://hub.docker.com/r/myorg/myrepo
 
   stagefreight narrator compose -f README.md --plain \
@@ -78,22 +78,24 @@ func runNarratorCompose(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "  warning: version detection failed: %v\n", err)
 	}
 
-	// Resolve URL bases from narrator config (if available).
-	linkBase := strings.TrimRight(cfg.Git.Narrator.LinkBase, "/")
-	rawBase := cfg.Git.Narrator.RawBase
-	if rawBase == "" && linkBase != "" {
-		rawBase = registry.DeriveRawBase(linkBase)
+	// Resolve URL bases from the first narrator file entry (if available).
+	var linkBase, rawBase string
+	if len(cfg.Narrator) > 0 {
+		linkBase = strings.TrimRight(cfg.Narrator[0].LinkBase, "/")
+		if linkBase != "" {
+			rawBase = registry.DeriveRawBase(linkBase)
+		}
+		rawBase = strings.TrimRight(rawBase, "/")
 	}
-	rawBase = strings.TrimRight(rawBase, "/")
 
-	// Parse CLI items into NarratorItems.
+	// Parse CLI items into v2 NarratorItems.
 	items, err := parseCLIItems(args)
 	if err != nil {
 		return err
 	}
 
-	// Build modules.
-	modules := buildModules(items, linkBase, rawBase, vi)
+	// Build modules using v2 kind-based dispatch.
+	modules := buildModulesV2(items, linkBase, rawBase, vi)
 	if len(modules) == 0 {
 		return fmt.Errorf("no valid modules produced from arguments")
 	}
@@ -118,7 +120,7 @@ func runNarratorCompose(cmd *cobra.Command, args []string) error {
 	}
 
 	original := content
-	position := config.NormalizePosition(ncPlacementPos)
+	position := normalizePosition(ncPlacementPos)
 
 	// Try to replace existing section first.
 	if !ncPlain && ncSection != "" {
@@ -166,6 +168,20 @@ func runNarratorCompose(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// normalizePosition normalizes a placement position string.
+func normalizePosition(pos string) string {
+	switch strings.ToLower(strings.TrimSpace(pos)) {
+	case "above", "top", "before":
+		return "top"
+	case "below", "bottom", "after":
+		return "bottom"
+	case "replace":
+		return "replace"
+	default:
+		return "bottom"
+	}
+}
+
 // placeWrapped places already-wrapped content using placement anchors.
 func placeWrapped(content, wrapped, position, sectionAnchor, matchPattern string) string {
 	if sectionAnchor != "" || matchPattern != "" {
@@ -182,8 +198,8 @@ func placeWrapped(content, wrapped, position, sectionAnchor, matchPattern string
 	}
 }
 
-// parseCLIItems converts CLI arguments like "badge:release,file:.stagefreight/badges/release.svg,link:..."
-// into NarratorItem config entries.
+// parseCLIItems converts CLI arguments like "badge:release,output:.stagefreight/badges/release.svg,link:..."
+// into v2 NarratorItem config entries.
 func parseCLIItems(args []string) ([]config.NarratorItem, error) {
 	var items []config.NarratorItem
 
@@ -198,21 +214,21 @@ func parseCLIItems(args []string) ([]config.NarratorItem, error) {
 	return items, nil
 }
 
-// parseCLIItem parses a single CLI item argument.
+// parseCLIItem parses a single CLI item argument into a v2 NarratorItem.
 // Format: type:value[,field:value,...]
 // Examples:
 //
-//	badge:release,file:.stagefreight/badges/release.svg,link:https://example.com
+//	badge:release,output:.stagefreight/badges/release.svg,link:https://example.com
 //	shield:docker/pulls/myorg/myrepo,link:https://hub.docker.com
 //	text:Hello World
+//	component:templates/stagefreight.yml
 //	break:
 func parseCLIItem(arg string) (config.NarratorItem, error) {
 	var item config.NarratorItem
 
 	// Handle break specially.
 	if arg == "break:" || arg == "break" {
-		t := true
-		item.Break = &t
+		item.Kind = "break"
 		return item, nil
 	}
 
@@ -228,25 +244,29 @@ func parseCLIItem(arg string) (config.NarratorItem, error) {
 	switch moduleType {
 	case "text":
 		// Text takes everything after "text:" as literal content.
-		item.Text = rest
+		item.Kind = "text"
+		item.Content = rest
 		return item, nil
 
 	case "badge":
-		// Parse comma-separated fields: badge:<alt>,file:<path>,link:<url>
+		// Parse comma-separated fields: badge:<label>,output:<path>,link:<url>
 		fields := splitFields(rest)
 		if len(fields) == 0 {
-			return item, fmt.Errorf("badge requires at least an alt value")
+			return item, fmt.Errorf("badge requires at least a label value")
 		}
-		item.Badge = fields[0]
+		item.Kind = "badge"
+		item.Text = fields[0] // badge label (left side text)
 		for _, f := range fields[1:] {
 			k, v := splitField(f)
 			switch k {
-			case "file":
-				item.File = v
-			case "url":
-				item.URL = v
+			case "output":
+				item.Output = v
 			case "link":
 				item.Link = v
+			case "value":
+				item.Value = v
+			case "color":
+				item.Color = v
 			}
 		}
 		return item, nil
@@ -257,6 +277,7 @@ func parseCLIItem(arg string) (config.NarratorItem, error) {
 		if len(fields) == 0 {
 			return item, fmt.Errorf("shield requires a path")
 		}
+		item.Kind = "shield"
 		item.Shield = fields[0]
 		for _, f := range fields[1:] {
 			k, v := splitField(f)
@@ -264,7 +285,7 @@ func parseCLIItem(arg string) (config.NarratorItem, error) {
 			case "link":
 				item.Link = v
 			case "label":
-				item.Label = v
+				item.Text = v // text field serves as label in v2
 			}
 		}
 		return item, nil
@@ -274,7 +295,8 @@ func parseCLIItem(arg string) (config.NarratorItem, error) {
 		if rest == "" {
 			return item, fmt.Errorf("component requires a spec file path")
 		}
-		item.Component = rest
+		item.Kind = "component"
+		item.Spec = rest
 		return item, nil
 
 	default:
@@ -286,7 +308,7 @@ func parseCLIItem(arg string) (config.NarratorItem, error) {
 // colons (like URLs). A field boundary is a comma followed by a known field name
 // and colon.
 func splitFields(s string) []string {
-	knownFields := []string{"file:", "url:", "link:", "label:", "component:"}
+	knownFields := []string{"output:", "link:", "label:", "value:", "color:", "component:"}
 
 	var fields []string
 	start := 0

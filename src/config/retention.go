@@ -10,11 +10,12 @@ import (
 // Policies are additive — a tag survives if ANY rule wants to keep it.
 // This mirrors restic's forget policy.
 type RetentionPolicy struct {
-	KeepLast    int `yaml:"keep_last"`    // keep the N most recent tags
-	KeepDaily   int `yaml:"keep_daily"`   // keep one per day for the last N days
-	KeepWeekly  int `yaml:"keep_weekly"`  // keep one per week for the last N weeks
-	KeepMonthly int `yaml:"keep_monthly"` // keep one per month for the last N months
-	KeepYearly  int `yaml:"keep_yearly"`  // keep one per year for the last N years
+	KeepLast    int      `yaml:"keep_last"`    // keep the N most recent tags
+	KeepDaily   int      `yaml:"keep_daily"`   // keep one per day for the last N days
+	KeepWeekly  int      `yaml:"keep_weekly"`  // keep one per week for the last N weeks
+	KeepMonthly int      `yaml:"keep_monthly"` // keep one per month for the last N months
+	KeepYearly  int      `yaml:"keep_yearly"`  // keep one per year for the last N years
+	Protect     []string `yaml:"protect"`      // tag patterns that are never deleted (v2)
 }
 
 // Active returns true if any retention rule is configured.

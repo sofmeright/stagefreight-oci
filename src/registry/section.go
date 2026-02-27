@@ -90,6 +90,44 @@ func ReplaceSection(content, name, replacement string) (updated string, found bo
 	return b.String(), true
 }
 
+// ReplaceBetween finds arbitrary start/end markers and replaces the content
+// between them. Markers themselves are preserved. Works like ReplaceSection
+// but with user-specified markers instead of the standard sf:NAME pattern.
+// Whitespace detection: if markers are inline (no newline between), no padding.
+func ReplaceBetween(content, startMarker, endMarker, replacement string) (updated string, found bool) {
+	startIdx := strings.Index(content, startMarker)
+	if startIdx < 0 {
+		return content, false
+	}
+
+	afterStart := startIdx + len(startMarker)
+	endRelative := strings.Index(content[afterStart:], endMarker)
+	if endRelative < 0 {
+		return content, false
+	}
+	endIdx := afterStart + endRelative
+
+	// Detect inline vs block from existing whitespace between markers.
+	between := content[afterStart:endIdx]
+	inline := !strings.Contains(between, "\n")
+
+	sep := "\n"
+	if inline {
+		sep = ""
+	}
+
+	var b strings.Builder
+	b.WriteString(content[:startIdx])
+	b.WriteString(startMarker)
+	b.WriteString(sep)
+	b.WriteString(replacement)
+	b.WriteString(sep)
+	b.WriteString(endMarker)
+	b.WriteString(content[endIdx+len(endMarker):])
+
+	return b.String(), true
+}
+
 // HasSection reports whether content contains markers for the named section.
 func HasSection(content, name string) bool {
 	return strings.Contains(content, SectionStart(name)) &&

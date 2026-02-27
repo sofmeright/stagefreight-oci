@@ -38,8 +38,8 @@ var releaseCreateCmd = &cobra.Command{
 with generated or provided release notes.
 
 Optionally uploads assets (scan artifacts, SBOMs) and adds
-registry image links. Syncs to configured sync targets unless
---skip-sync is set.`,
+registry image links. Syncs to configured remote release targets
+unless --skip-sync is set.`,
 	RunE: runReleaseCreate,
 }
 
@@ -163,6 +163,10 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Collect release targets from config
+	primaryRelease := findPrimaryReleaseTarget(cfg)
+	remoteReleases := findRemoteReleaseTargets(cfg)
+
 	// ── Collect all results ──
 	start := time.Now()
 	report := releaseReport{
@@ -170,7 +174,7 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 		Forge: string(provider),
 	}
 
-	// Create release
+	// Create release on primary forge
 	rel, createErr := forgeClient.CreateRelease(ctx, forge.ReleaseOptions{
 		TagName:     tag,
 		Name:        name,
@@ -204,13 +208,14 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Add registry image links (deduplicate by URL)
-	if rcRegistryLinks && len(cfg.Docker.Registries) > 0 {
+	// Add registry image links (from kind: registry targets, deduplicate by URL)
+	registryTargets := collectTargetsByKind(cfg, "registry")
+	if rcRegistryLinks && len(registryTargets) > 0 {
 		linkedURLs := make(map[string]bool)
-		for _, reg := range cfg.Docker.Registries {
-			regProvider := reg.Provider
+		for _, t := range registryTargets {
+			regProvider := t.Provider
 			if regProvider == "" {
-				regProvider = build.DetectProvider(reg.URL)
+				regProvider = build.DetectProvider(t.URL)
 			}
 			if p, err := registry.CanonicalProvider(regProvider); err == nil {
 				regProvider = p
@@ -218,7 +223,10 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 				regProvider = "generic"
 			}
 
-			link := buildRegistryLink(reg, tag, regProvider)
+			// Resolve vars in path for display
+			resolvedPath := gitver.ResolveVars(t.Path, cfg.Vars)
+
+			link := buildRegistryLinkFromTarget(t.URL, resolvedPath, tag, regProvider)
 			if linkedURLs[link.URL] {
 				continue
 			}
@@ -226,35 +234,42 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 
 			if err := forgeClient.AddReleaseLink(ctx, rel.ID, link); err != nil {
 				report.Links = append(report.Links, actionResult{Name: link.Name, Err: err})
-				fmt.Fprintf(os.Stderr, "warning: failed to add registry link for %s: %v\n", reg.URL, err)
+				fmt.Fprintf(os.Stderr, "warning: failed to add registry link for %s: %v\n", t.URL, err)
 			} else {
 				report.Links = append(report.Links, actionResult{Name: link.Name, OK: true})
 			}
 		}
 	}
 
-	// Add GitLab Catalog link
-	if rcCatalogLinks && cfg.GitlabComponent.Catalog && provider == forge.GitLab {
-		catalogLink := buildCatalogLink(remoteURL, tag)
-		if catalogLink.URL != "" {
-			if err := forgeClient.AddReleaseLink(ctx, rel.ID, catalogLink); err != nil {
-				report.Links = append(report.Links, actionResult{Name: catalogLink.Name, Err: err})
-				fmt.Fprintf(os.Stderr, "warning: failed to add catalog link: %v\n", err)
-			} else {
-				report.Links = append(report.Links, actionResult{Name: catalogLink.Name, OK: true})
+	// Add GitLab Catalog link (from kind: gitlab-component targets)
+	if rcCatalogLinks && provider == forge.GitLab {
+		for _, t := range cfg.Targets {
+			if t.Kind == "gitlab-component" && t.Catalog {
+				catalogLink := buildCatalogLink(remoteURL, tag)
+				if catalogLink.URL != "" {
+					if err := forgeClient.AddReleaseLink(ctx, rel.ID, catalogLink); err != nil {
+						report.Links = append(report.Links, actionResult{Name: catalogLink.Name, Err: err})
+						fmt.Fprintf(os.Stderr, "warning: failed to add catalog link: %v\n", err)
+					} else {
+						report.Links = append(report.Links, actionResult{Name: catalogLink.Name, OK: true})
+					}
+				}
+				break // only one catalog link
 			}
 		}
 	}
 
-	// Auto-tagging: create rolling releases for configured tag templates
-	if len(cfg.Release.Tags) > 0 {
+	// Auto-tagging: create rolling releases for configured aliases on primary release target
+	if primaryRelease != nil && len(primaryRelease.Aliases) > 0 {
 		currentTag := os.Getenv("CI_COMMIT_TAG")
-		if config.MatchPatternsWithPolicy(cfg.Release.GitTags, currentTag, cfg.Git.Policy.Tags) || currentTag == "" {
-			rollingTags := gitver.ResolveTags(cfg.Release.Tags, versionInfo)
+		// Check when conditions on the primary release target
+		if targetWhenMatches(*primaryRelease, currentTag) {
+			rollingTags := gitver.ResolveTags(primaryRelease.Aliases, versionInfo)
 			for _, rt := range rollingTags {
 				if rt == tag || rt == "" {
 					continue
 				}
+				// Try create, fallback to delete+recreate on conflict
 				_, err := forgeClient.CreateRelease(ctx, forge.ReleaseOptions{
 					TagName:     rt,
 					Name:        rt,
@@ -262,7 +277,7 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 					Prerelease:  rcPrerelease,
 				})
 				if err != nil {
-					// Rolling tag may already exist — try delete then recreate
+					// Rolling tag may already exist — delete then recreate
 					_ = forgeClient.DeleteRelease(ctx, rt)
 					_, err = forgeClient.CreateRelease(ctx, forge.ReleaseOptions{
 						TagName:     rt,
@@ -312,30 +327,30 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 	sec.Close()
 	output.SectionEnd(w, "sf_release")
 
-	// ── Sync section ──
-	if !rcSkipSync && len(cfg.Release.Sync) > 0 {
+	// ── Sync section (remote release targets) ──
+	if !rcSkipSync && len(remoteReleases) > 0 {
 		currentTag := os.Getenv("CI_COMMIT_TAG")
-		currentBranch := resolveBranchFromEnv()
 
 		var syncResults []actionResult
 		syncStart := time.Now()
 
-		for _, target := range cfg.Release.Sync {
-			if !syncAllowed(target, currentTag, currentBranch, cfg.Git.Policy) {
+		for _, t := range remoteReleases {
+			// Check when conditions
+			if !targetWhenMatches(t, currentTag) {
 				if verbose {
-					fmt.Fprintf(os.Stderr, "skip sync: %s (tag=%q branch=%q not allowed)\n", target.Name, currentTag, currentBranch)
+					fmt.Fprintf(os.Stderr, "skip sync: %s (when conditions not met)\n", t.ID)
 				}
 				continue
 			}
 
-			syncClient, err := newSyncForgeClient(target)
+			syncClient, err := newSyncForgeClientFromTarget(t)
 			if err != nil {
-				syncResults = append(syncResults, actionResult{Name: target.Name, Err: err})
-				fmt.Fprintf(os.Stderr, "warning: sync to %s: %v\n", target.Name, err)
+				syncResults = append(syncResults, actionResult{Name: t.ID, Err: err})
+				fmt.Fprintf(os.Stderr, "warning: sync to %s: %v\n", t.ID, err)
 				continue
 			}
 
-			if target.SyncRelease {
+			if t.SyncRelease {
 				syncRel, err := syncClient.CreateRelease(ctx, forge.ReleaseOptions{
 					TagName:     tag,
 					Name:        name,
@@ -344,15 +359,15 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 					Prerelease:  rcPrerelease,
 				})
 				if err != nil {
-					syncResults = append(syncResults, actionResult{Name: target.Name, Err: err})
-					fmt.Fprintf(os.Stderr, "warning: sync release to %s: %v\n", target.Name, err)
+					syncResults = append(syncResults, actionResult{Name: t.ID, Err: err})
+					fmt.Fprintf(os.Stderr, "warning: sync release to %s: %v\n", t.ID, err)
 					continue
 				}
 
-				syncResults = append(syncResults, actionResult{Name: fmt.Sprintf("%s: %s", target.Name, syncRel.URL), OK: true})
+				syncResults = append(syncResults, actionResult{Name: fmt.Sprintf("%s: %s", t.ID, syncRel.URL), OK: true})
 
 				// Sync assets to this target
-				if target.SyncAssets {
+				if t.SyncAssets {
 					for _, assetPath := range rcAssets {
 						assetName := assetPath
 						for i := len(assetPath) - 1; i >= 0; i-- {
@@ -365,7 +380,7 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 							Name:     assetName,
 							FilePath: assetPath,
 						}); err != nil {
-							fmt.Fprintf(os.Stderr, "warning: sync asset %s to %s: %v\n", assetName, target.Name, err)
+							fmt.Fprintf(os.Stderr, "warning: sync asset %s to %s: %v\n", assetName, t.ID, err)
 						}
 					}
 				}
@@ -392,15 +407,15 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// ── Retention section ──
-	if cfg.Release.Retention.Active() {
+	// ── Retention section (from primary release target) ──
+	if primaryRelease != nil && primaryRelease.Retention != nil && primaryRelease.Retention.Active() {
 		retStart := time.Now()
 		var patterns []string
-		if len(cfg.Release.Tags) > 0 {
-			patterns = retention.TemplatesToPatterns(cfg.Release.Tags)
+		if len(primaryRelease.Aliases) > 0 {
+			patterns = retention.TemplatesToPatterns(primaryRelease.Aliases)
 		}
 		store := &forgeStore{forge: forgeClient}
-		result, retErr := retention.Apply(ctx, store, patterns, cfg.Release.Retention)
+		result, retErr := retention.Apply(ctx, store, patterns, *primaryRelease.Retention)
 
 		retElapsed := time.Since(retStart)
 
@@ -424,6 +439,62 @@ func runReleaseCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// findPrimaryReleaseTarget returns the first release target with no remote forge fields (primary mode).
+func findPrimaryReleaseTarget(cfg *config.Config) *config.TargetConfig {
+	for _, t := range cfg.Targets {
+		if t.Kind == "release" && !t.IsRemoteRelease() {
+			return &t
+		}
+	}
+	return nil
+}
+
+// findRemoteReleaseTargets returns all release targets with remote forge fields set.
+func findRemoteReleaseTargets(cfg *config.Config) []config.TargetConfig {
+	var targets []config.TargetConfig
+	for _, t := range cfg.Targets {
+		if t.Kind == "release" && t.IsRemoteRelease() {
+			targets = append(targets, t)
+		}
+	}
+	return targets
+}
+
+// targetWhenMatches checks if a target's when conditions match the current CI environment.
+// Resolves policy names from cfg.Policies.
+func targetWhenMatches(t config.TargetConfig, currentTag string) bool {
+	if len(t.When.GitTags) > 0 && currentTag != "" {
+		resolved := resolveWhenPatternsFromCfg(t.When.GitTags, cfg.Policies.GitTags)
+		if !config.MatchPatterns(resolved, currentTag) {
+			return false
+		}
+	}
+	if len(t.When.Branches) > 0 {
+		branch := resolveBranchFromEnv()
+		resolved := resolveWhenPatternsFromCfg(t.When.Branches, cfg.Policies.Branches)
+		if !config.MatchPatterns(resolved, branch) {
+			return false
+		}
+	}
+	return true
+}
+
+// resolveWhenPatternsFromCfg resolves when condition entries to regex patterns.
+// "re:" prefixed entries are inline regex, others are policy name lookups.
+func resolveWhenPatternsFromCfg(entries []string, policyMap map[string]string) []string {
+	resolved := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if len(entry) > 3 && entry[:3] == "re:" {
+			resolved = append(resolved, entry[3:])
+		} else if regex, ok := policyMap[entry]; ok {
+			resolved = append(resolved, regex)
+		} else {
+			resolved = append(resolved, entry)
+		}
+	}
+	return resolved
 }
 
 // renderCheckpoint renders a checkpoint line with pass/fail count, expanding failures.
@@ -466,25 +537,25 @@ func hasActionFailures(results []actionResult) bool {
 	return false
 }
 
-// buildRegistryLink creates a forge release link for a registry image.
+// buildRegistryLinkFromTarget creates a forge release link for a registry target.
 // Constructs vendor-aware URLs (e.g., Docker Hub web URL vs generic registry).
-func buildRegistryLink(reg config.RegistryConfig, tag string, provider string) forge.ReleaseLink {
-	imageRef := fmt.Sprintf("%s/%s:%s", reg.URL, reg.Path, tag)
+func buildRegistryLinkFromTarget(url, path, tag, provider string) forge.ReleaseLink {
+	imageRef := fmt.Sprintf("%s/%s:%s", url, path, tag)
 
 	var webURL string
 	switch provider {
 	case "docker":
 		// Docker Hub web URL: hub.docker.com/r/org/repo/tags
-		webURL = fmt.Sprintf("https://hub.docker.com/r/%s/tags?name=%s", reg.Path, tag)
+		webURL = fmt.Sprintf("https://hub.docker.com/r/%s/tags?name=%s", path, tag)
 	case "github":
 		// GitHub Container Registry: ghcr.io/org/repo
-		webURL = fmt.Sprintf("https://github.com/%s/pkgs/container/%s", ownerFromPath(reg.Path), repoFromPath(reg.Path))
+		webURL = fmt.Sprintf("https://github.com/%s/pkgs/container/%s", ownerFromPath(path), repoFromPath(path))
 	case "quay":
-		webURL = fmt.Sprintf("https://quay.io/repository/%s?tag=%s", reg.Path, tag)
+		webURL = fmt.Sprintf("https://quay.io/repository/%s?tag=%s", path, tag)
 	case "gitlab":
-		webURL = fmt.Sprintf("%s/%s/container_registry", reg.URL, reg.Path)
+		webURL = fmt.Sprintf("%s/%s/container_registry", url, path)
 	case "jfrog":
-		webURL = fmt.Sprintf("https://%s/ui/repos/tree/General/%s", reg.URL, reg.Path)
+		webURL = fmt.Sprintf("https://%s/ui/repos/tree/General/%s", url, path)
 	default:
 		webURL = imageRef
 	}
@@ -611,18 +682,6 @@ func projectPathFromRemote(remoteURL string) string {
 	return ""
 }
 
-// syncAllowed checks if a sync target should be activated for the current tag/branch.
-// Uses policy-aware pattern matching — supports regex, ! negation, and policy name resolution.
-func syncAllowed(target config.SyncTarget, tag, branch string, policy config.GitPolicyConfig) bool {
-	if !config.MatchPatternsWithPolicy(target.Branches, branch, policy.Branches) {
-		return false
-	}
-	if tag != "" && !config.MatchPatternsWithPolicy(target.Tags, tag, policy.Tags) {
-		return false
-	}
-	return true
-}
-
 // resolveBranchFromEnv resolves the current branch from CI environment variables.
 func resolveBranchFromEnv() string {
 	if b := os.Getenv("CI_COMMIT_BRANCH"); b != "" {
@@ -662,52 +721,54 @@ func newForgeClient(provider forge.Provider, remoteURL string) (forge.Forge, err
 	}
 }
 
-// newSyncForgeClient creates a forge client for a sync target.
-func newSyncForgeClient(target config.SyncTarget) (forge.Forge, error) {
-	switch target.Provider {
+// newSyncForgeClientFromTarget creates a forge client for a remote release target.
+func newSyncForgeClientFromTarget(t config.TargetConfig) (forge.Forge, error) {
+	switch t.Provider {
 	case "gitlab":
-		gl := forge.NewGitLab(target.URL)
-		// Override with sync-specific credentials
-		if target.Credentials != "" {
-			token := os.Getenv(target.Credentials + "_TOKEN")
+		gl := forge.NewGitLab(t.URL)
+		// Override with target-specific credentials
+		if t.Credentials != "" {
+			token := os.Getenv(t.Credentials + "_TOKEN")
 			if token == "" {
-				return nil, fmt.Errorf("sync target %s: %s_TOKEN env var not set", target.Name, target.Credentials)
+				return nil, fmt.Errorf("release target %s: %s_TOKEN env var not set", t.ID, t.Credentials)
 			}
 			gl.Token = token
 		}
-		if target.ProjectID != "" {
-			gl.ProjectID = target.ProjectID
+		if t.ProjectID != "" {
+			gl.ProjectID = t.ProjectID
 		}
 		return gl, nil
 	case "github":
-		gh := forge.NewGitHub(target.URL)
-		if target.Credentials != "" {
-			token := os.Getenv(target.Credentials + "_TOKEN")
+		gh := forge.NewGitHub(t.URL)
+		// Override with target-specific credentials
+		if t.Credentials != "" {
+			token := os.Getenv(t.Credentials + "_TOKEN")
 			if token == "" {
-				return nil, fmt.Errorf("sync target %s: %s_TOKEN env var not set", target.Name, target.Credentials)
+				return nil, fmt.Errorf("release target %s: %s_TOKEN env var not set", t.ID, t.Credentials)
 			}
 			gh.Token = token
 		}
-		if target.ProjectID != "" {
-			gh.Owner = ownerFromPath(target.ProjectID)
-			gh.Repo = repoFromPath(target.ProjectID)
+		if t.ProjectID != "" {
+			gh.Owner = ownerFromPath(t.ProjectID)
+			gh.Repo = repoFromPath(t.ProjectID)
 		}
 		return gh, nil
 	case "gitea":
-		gt := forge.NewGitea(target.URL)
-		if target.Credentials != "" {
-			token := os.Getenv(target.Credentials + "_TOKEN")
+		gt := forge.NewGitea(t.URL)
+		// Override with target-specific credentials
+		if t.Credentials != "" {
+			token := os.Getenv(t.Credentials + "_TOKEN")
 			if token == "" {
-				return nil, fmt.Errorf("sync target %s: %s_TOKEN env var not set", target.Name, target.Credentials)
+				return nil, fmt.Errorf("release target %s: %s_TOKEN env var not set", t.ID, t.Credentials)
 			}
 			gt.Token = token
 		}
-		if target.ProjectID != "" {
-			gt.Owner = ownerFromPath(target.ProjectID)
-			gt.Repo = repoFromPath(target.ProjectID)
+		if t.ProjectID != "" {
+			gt.Owner = ownerFromPath(t.ProjectID)
+			gt.Repo = repoFromPath(t.ProjectID)
 		}
 		return gt, nil
 	default:
-		return nil, fmt.Errorf("unknown sync provider: %s", target.Provider)
+		return nil, fmt.Errorf("unknown sync provider: %s", t.Provider)
 	}
 }

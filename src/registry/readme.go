@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	"github.com/sofmeright/stagefreight/src/config"
 )
 
 // ReadmeContent holds the processed README ready for pushing to registries.
@@ -16,11 +14,9 @@ type ReadmeContent struct {
 	Full  string // full markdown
 }
 
-// PrepareReadme loads, processes, and returns README content ready for registry sync.
-// Badge composition is handled by narrator before this function is called.
-func PrepareReadme(cfg config.DockerReadmeConfig, rootDir string) (*ReadmeContent, error) {
-	// 1. Load file
-	file := cfg.File
+// PrepareReadmeFromFile loads a README file and returns processed content ready for registry sync.
+// Takes individual fields for maximum flexibility — callers resolve config to args.
+func PrepareReadmeFromFile(file, description, linkBase, rootDir string) (*ReadmeContent, error) {
 	if file == "" {
 		file = "README.md"
 	}
@@ -36,40 +32,13 @@ func PrepareReadme(cfg config.DockerReadmeConfig, rootDir string) (*ReadmeConten
 	}
 	content := string(raw)
 
-	// 2. Extract markers
-	if cfg.Markers != nil && *cfg.Markers {
-		start := cfg.StartMarker
-		if start == "" {
-			start = "<!-- dockerhub-start -->"
-		}
-		end := cfg.EndMarker
-		if end == "" {
-			end = "<!-- dockerhub-end -->"
-		}
-
-		extracted, err := extractMarkers(content, start, end)
-		if err != nil {
-			return nil, err
-		}
-		content = extracted
+	// Rewrite relative links if link_base is set
+	if linkBase != "" {
+		content = rewriteRelativeLinks(content, linkBase)
 	}
 
-	// 3. Rewrite relative links
-	if cfg.LinkBase != "" {
-		content = rewriteRelativeLinks(content, cfg.LinkBase)
-	}
-
-	// 4. Apply regex transforms
-	for _, t := range cfg.Transforms {
-		re, err := regexp.Compile(t.Pattern)
-		if err != nil {
-			return nil, fmt.Errorf("readme: invalid transform pattern %q: %w", t.Pattern, err)
-		}
-		content = re.ReplaceAllString(content, t.Replace)
-	}
-
-	// 5. Generate short description
-	short := cfg.Description
+	// Generate short description
+	short := description
 	if short == "" {
 		short = extractFirstParagraph(content)
 	}

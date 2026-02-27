@@ -3,12 +3,11 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/sofmeright/stagefreight/src/config"
+	"github.com/sofmeright/stagefreight/src/build"
 	"github.com/sofmeright/stagefreight/src/output"
 	"github.com/sofmeright/stagefreight/src/registry"
 )
@@ -48,31 +47,125 @@ func runDockerReadme(cmd *cobra.Command, args []string) error {
 		rootDir = args[0]
 	}
 
-	if !cfg.Docker.Readme.IsActive() {
-		return fmt.Errorf("no readme configuration found in docker.readme")
+	// Collect docker-readme targets
+	targets := collectTargetsByKind(cfg, "docker-readme")
+	if len(targets) == 0 {
+		return fmt.Errorf("no docker-readme targets configured")
 	}
 
 	ctx := context.Background()
 	color := output.UseColor()
 	w := os.Stdout
 
-	content, err := registry.PrepareReadme(cfg.Docker.Readme, rootDir)
-	if err != nil {
-		return err
-	}
-
+	// For dry-run, show content from the first target's file
 	if drDryRun {
+		t := targets[0]
+		file := t.File
+		if file == "" {
+			file = "README.md"
+		}
+		content, err := registry.PrepareReadmeFromFile(file, t.Description, t.LinkBase, rootDir)
+		if err != nil {
+			return err
+		}
 		fmt.Fprintf(w, "Short description (%d chars):\n  %s\n\n", len(content.Short), content.Short)
 		fmt.Fprintf(w, "Full description (%d bytes):\n%s\n", len(content.Full), content.Full)
 		return nil
 	}
 
 	start := time.Now()
-	results := syncReadmeCollect(ctx, cfg.Docker.Readme, cfg.Docker.Registries, content)
+	var results []readmeSyncResult
+
+	for _, t := range targets {
+		file := t.File
+		if file == "" {
+			file = "README.md"
+		}
+
+		content, err := registry.PrepareReadmeFromFile(file, t.Description, t.LinkBase, rootDir)
+		if err != nil {
+			results = append(results, readmeSyncResult{
+				Registry: t.URL + "/" + t.Path,
+				Status:   "failed",
+				Detail:   err.Error(),
+				Err:      err,
+			})
+			continue
+		}
+
+		// Resolve provider from explicit config or auto-detect from URL
+		provider := t.Provider
+		if provider == "" {
+			provider = build.DetectProvider(t.URL)
+		}
+
+		// Only docker, github, quay, harbor support description APIs
+		switch provider {
+		case "docker", "github", "quay", "harbor":
+			// supported
+		default:
+			results = append(results, readmeSyncResult{
+				Registry: t.URL + "/" + t.Path,
+				Status:   "skipped",
+				Detail:   "no description API",
+			})
+			continue
+		}
+
+		client, err := registry.NewRegistry(provider, t.URL, t.Credentials)
+		if err != nil {
+			results = append(results, readmeSyncResult{
+				Registry: t.URL + "/" + t.Path,
+				Status:   "failed",
+				Detail:   err.Error(),
+				Err:      err,
+			})
+			continue
+		}
+
+		// Per-target description override
+		short := content.Short
+		if t.Description != "" {
+			short = t.Description
+		}
+
+		err = client.UpdateDescription(ctx, t.Path, short, content.Full)
+
+		// Surface credential warnings (populated during auth)
+		if warner, ok := client.(registry.Warner); ok {
+			for _, warn := range warner.Warnings() {
+				fmt.Fprintf(os.Stderr, "warning: %s/%s: %s\n", t.URL, t.Path, warn)
+			}
+		}
+
+		if err != nil {
+			if registry.IsForbidden(err) {
+				results = append(results, readmeSyncResult{
+					Registry: t.URL + "/" + t.Path,
+					Status:   "skipped",
+					Detail:   "forbidden (ensure PAT has read/write/delete scope)",
+				})
+				continue
+			}
+			results = append(results, readmeSyncResult{
+				Registry: t.URL + "/" + t.Path,
+				Status:   "failed",
+				Detail:   err.Error(),
+				Err:      err,
+			})
+			continue
+		}
+
+		results = append(results, readmeSyncResult{
+			Registry: t.URL + "/" + t.Path,
+			Status:   "success",
+		})
+	}
+
 	elapsed := time.Since(start)
 
 	// Tally
-	var synced, skipped, errors int
+	var synced, skipped, errCount int
 	for _, r := range results {
 		switch r.Status {
 		case "success":
@@ -80,7 +173,7 @@ func runDockerReadme(cmd *cobra.Command, args []string) error {
 		case "skipped":
 			skipped++
 		case "failed":
-			errors++
+			errCount++
 		}
 	}
 
@@ -93,192 +186,13 @@ func runDockerReadme(cmd *cobra.Command, args []string) error {
 	}
 
 	sec.Separator()
-	sec.Row("%d synced, %d skipped, %d errors", synced, skipped, errors)
+	sec.Row("%d synced, %d skipped, %d errors", synced, skipped, errCount)
 
 	sec.Close()
 	output.SectionEnd(w, "sf_readme")
 
-	if errors > 0 {
-		return fmt.Errorf("readme sync had %d error(s)", errors)
+	if errCount > 0 {
+		return fmt.Errorf("readme sync had %d error(s)", errCount)
 	}
 	return nil
-}
-
-// syncReadmeCollect pushes README content to all supported registries,
-// returning results for each. Used by standalone `docker readme` command.
-func syncReadmeCollect(ctx context.Context, readmeCfg config.DockerReadmeConfig, registries []config.RegistryConfig, content *registry.ReadmeContent) []readmeSyncResult {
-	var results []readmeSyncResult
-	seen := make(map[string]bool)
-
-	for _, reg := range registries {
-		name := reg.URL + "/" + reg.Path
-
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-
-		provider := reg.Provider
-		if provider == "" {
-			provider = "generic"
-		} else {
-			var err error
-			provider, err = registry.CanonicalProvider(provider)
-			if err != nil {
-				results = append(results, readmeSyncResult{Registry: name, Status: "failed", Detail: err.Error()})
-				continue
-			}
-		}
-
-		// Only docker, github, quay, harbor support description APIs
-		switch provider {
-		case "docker", "github", "quay", "harbor":
-			// supported
-		default:
-			results = append(results, readmeSyncResult{Registry: name, Status: "skipped", Detail: "no description API"})
-			continue
-		}
-
-		client, err := registry.NewRegistry(provider, reg.URL, reg.Credentials)
-		if err != nil {
-			results = append(results, readmeSyncResult{Registry: name, Status: "failed", Detail: err.Error(), Err: err})
-			fmt.Fprintf(os.Stderr, "readme: error %s: %v\n", name, err)
-			continue
-		}
-
-		// Per-registry description override
-		short := content.Short
-		if reg.Description != "" {
-			short = reg.Description
-		}
-
-		err = client.UpdateDescription(ctx, reg.Path, short, content.Full)
-
-		// Surface credential warnings (populated during auth)
-		if w, ok := client.(registry.Warner); ok {
-			for _, warn := range w.Warnings() {
-				fmt.Fprintf(os.Stderr, "warning: %s: %s\n", name, warn)
-			}
-		}
-
-		if err != nil {
-			if registry.IsForbidden(err) {
-				results = append(results, readmeSyncResult{Registry: name, Status: "skipped", Detail: "forbidden (ensure PAT has read/write/delete scope at https://hub.docker.com/settings/security)"})
-				continue
-			}
-			results = append(results, readmeSyncResult{Registry: name, Status: "failed", Detail: err.Error(), Err: err})
-			fmt.Fprintf(os.Stderr, "readme: error %s: %v\n", name, err)
-			continue
-		}
-
-		results = append(results, readmeSyncResult{Registry: name, Status: "success"})
-	}
-
-	return results
-}
-
-// syncReadmeToRegistries pushes README content to all supported registries.
-// Returns counts of synced, skipped, and errored registries.
-// Used by the docker build pipeline — left untouched for pipeline compatibility.
-func syncReadmeToRegistries(ctx context.Context, w io.Writer, readmeCfg config.DockerReadmeConfig, registries []config.RegistryConfig, content *registry.ReadmeContent) (synced, skipped, errors int) {
-	seen := make(map[string]bool)
-	for _, reg := range registries {
-		name := reg.URL + "/" + reg.Path
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-
-		provider := reg.Provider
-		if provider == "" {
-			provider = "generic"
-		} else {
-			var err error
-			provider, err = registry.CanonicalProvider(provider)
-			if err != nil {
-				fmt.Fprintf(w, "  readme: invalid provider %s/%s: %v\n", reg.URL, reg.Path, err)
-				errors++
-				continue
-			}
-		}
-
-		// Only docker, github, quay, harbor support description APIs
-		switch provider {
-		case "docker", "github", "quay", "harbor":
-			// supported
-		default:
-			skipped++
-			if verbose {
-				fmt.Fprintf(w, "  readme: skip %s/%s (%s: no description API)\n", reg.URL, reg.Path, provider)
-			}
-			continue
-		}
-
-		client, err := registry.NewRegistry(provider, reg.URL, reg.Credentials)
-		if err != nil {
-			fmt.Fprintf(w, "  readme: error %s/%s: %v\n", reg.URL, reg.Path, err)
-			errors++
-			continue
-		}
-
-		// Per-registry description override
-		short := content.Short
-		if reg.Description != "" {
-			short = reg.Description
-		}
-
-		err = client.UpdateDescription(ctx, reg.Path, short, content.Full)
-
-		// Surface credential warnings (populated during auth)
-		if w2, ok := client.(registry.Warner); ok {
-			for _, warn := range w2.Warnings() {
-				fmt.Fprintf(w, "  readme: warning %s/%s: %s\n", reg.URL, reg.Path, warn)
-			}
-		}
-
-		if err != nil {
-			if registry.IsForbidden(err) {
-				skipped++
-				if verbose {
-					fmt.Fprintf(w, "  readme: skip %s/%s (forbidden: PAT cannot update descriptions)\n", reg.URL, reg.Path)
-				}
-				continue
-			}
-			fmt.Fprintf(w, "  readme: error %s/%s: %v\n", reg.URL, reg.Path, err)
-			errors++
-			continue
-		}
-
-		fmt.Fprintf(w, "  readme: synced %s/%s\n", reg.URL, reg.Path)
-		synced++
-	}
-	return
-}
-
-// runReadmeSync is the auto-sync entry point called from docker build.
-// Non-fatal: errors are warnings that never fail the build.
-func runReadmeSync(ctx context.Context, w io.Writer, ci bool, readmeCfg config.DockerReadmeConfig, registries []config.RegistryConfig, rootDir string) {
-	output.SectionStartCollapsed(w, "sf_readme", "README Sync")
-	start := time.Now()
-
-	content, err := registry.PrepareReadme(readmeCfg, rootDir)
-	if err != nil {
-		elapsed := time.Since(start)
-		output.PhaseResult(w, "readme", "failed", err.Error(), elapsed)
-		output.SectionEnd(w, "sf_readme")
-		return
-	}
-
-	synced, skipped, errors := syncReadmeToRegistries(ctx, w, readmeCfg, registries, content)
-	elapsed := time.Since(start)
-
-	detail := fmt.Sprintf("synced %d, skipped %d", synced, skipped)
-	status := "success"
-	if errors > 0 {
-		detail += fmt.Sprintf(", %d error(s)", errors)
-		status = "failed"
-	}
-
-	output.PhaseResult(w, "readme", status, detail, elapsed)
-	output.SectionEnd(w, "sf_readme")
 }

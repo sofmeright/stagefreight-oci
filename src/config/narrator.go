@@ -1,161 +1,127 @@
 package config
 
-import (
-	"fmt"
-	"strings"
+// NarratorFile defines narrator composition for a single file target.
+// v2 flattens the old files[] > sections[] > items[] hierarchy into
+// a 2-level structure: file targets with self-describing items.
+type NarratorFile struct {
+	// File is the path to the target file (required).
+	File string `yaml:"file"`
 
-	"gopkg.in/yaml.v3"
-)
+	// LinkBase is the base URL for relative link rewriting.
+	LinkBase string `yaml:"link_base,omitempty"`
 
-// NarratorConfig holds the top-level narrator configuration.
-type NarratorConfig struct {
-	LinkBase string                `yaml:"link_base"` // base URL for resolving relative links
-	RawBase  string                `yaml:"raw_base"`  // base URL for raw file access (auto-derived if empty)
-	Badges   NarratorBadgeDefaults `yaml:"badges"`    // default badge generation settings
-	Files    []NarratorFileConfig  `yaml:"files"`     // files to compose into
+	// Items are the composable content items for this file.
+	Items []NarratorItem `yaml:"items"`
 }
 
-// NarratorBadgeDefaults holds default settings for badge generation
-// within narrator items. Individual items can override these.
-type NarratorBadgeDefaults struct {
-	Font     string  `yaml:"font"`      // default built-in font name (default: "dejavu-sans")
-	FontSize float64 `yaml:"font_size"` // default pixel size (default: 11)
-	FontFile string  `yaml:"font_file"` // default custom font file path
-}
-
-// NarratorFileConfig defines narrator composition for a single file.
-type NarratorFileConfig struct {
-	ID       string            `yaml:"id"`       // stable identifier for future overlay/selection
-	Path     string            `yaml:"path"`     // file path (relative to project root)
-	Sections []NarratorSection `yaml:"sections"` // sections to compose
-}
-
-// NarratorSection defines a managed section with placement and items.
-type NarratorSection struct {
-	ID        string            `yaml:"id"`        // stable identifier for future overlay/selection
-	Name      string            `yaml:"name"`      // section name (used in <!-- sf:<name> --> markers)
-	Placement NarratorPlacement `yaml:"placement"` // where to place the section
-	Inline    bool              `yaml:"inline"`    // if true, insert inline (no newline padding) on first creation
-	Plain     bool              `yaml:"plain"`     // if true, output without <!-- sf: --> markers
-	Items     []NarratorItem    `yaml:"items"`     // modules to compose
-}
-
-// NarratorPlacement controls where a section is placed in the document.
-// Supports both shorthand string ("top", "bottom") and full object form.
-type NarratorPlacement struct {
-	Section  string `yaml:"section"`  // reference to another <!-- sf:<name> --> section
-	Match    string `yaml:"match"`    // regex pattern against document content
-	Position string `yaml:"position"` // above/below (default)/replace (with aliases)
-}
-
-// UnmarshalYAML implements custom unmarshaling for placement shorthand.
-// Accepts either a string ("top", "bottom") or a full object.
-func (p *NarratorPlacement) UnmarshalYAML(value *yaml.Node) error {
-	if value.Kind == yaml.ScalarNode {
-		s := value.Value
-		switch strings.ToLower(s) {
-		case "top":
-			p.Position = "top"
-		case "bottom":
-			p.Position = "bottom"
-		default:
-			return fmt.Errorf("unknown placement shorthand %q (expected \"top\" or \"bottom\")", s)
-		}
-		return nil
-	}
-
-	// Full object form.
-	type plain NarratorPlacement
-	return value.Decode((*plain)(p))
-}
-
-// NormalizedPosition returns the canonical position from aliases.
-// Returns "below" if empty or unrecognized.
-func (p NarratorPlacement) NormalizedPosition() string {
-	return NormalizePosition(p.Position)
-}
-
-// NormalizePosition maps position aliases to canonical forms.
-// Returns "below" for empty or unrecognized values.
-func NormalizePosition(pos string) string {
-	switch strings.ToLower(strings.TrimSpace(pos)) {
-	case "above", "over", "up":
-		return "above"
-	case "below", "under", "down", "bottom", "beneath", "":
-		return "below"
-	case "replace", "fill", "inside", "target":
-		return "replace"
-	case "top":
-		return "top"
-	}
-	return "below"
-}
-
-// NarratorItem defines a single composable item. Exactly one module field must be set.
+// NarratorItem defines a single composable content item.
+// Each item self-describes its kind and placement.
 type NarratorItem struct {
-	// Stable ID for future overlay/profile/selection.
+	// ID is the item identifier (unique within file).
 	ID string `yaml:"id"`
 
-	// Module types (exactly one must be set)
-	Badge     string `yaml:"badge"`     // badge alt text / name
-	Shield    string `yaml:"shield"`    // shields.io path
-	Text      string `yaml:"text"`      // literal markdown text
-	Component string `yaml:"component"` // component spec file path — renders input docs
-	Break     *bool  `yaml:"break"`     // forces a line break; only break:true counts, break:false is equivalent to unset
+	// Kind is the item type: badge, shield, text, component, break.
+	Kind string `yaml:"kind"`
 
-	// Display fields
-	File  string `yaml:"file"`  // display reference (defaults to Output when not set)
-	URL   string `yaml:"url"`   // absolute image URL (asset location)
-	Link  string `yaml:"link"`  // click target (hyperlink destination)
-	Label string `yaml:"label"` // override label (badge alt text, shield override)
+	// Placement declares where this item goes in the target file.
+	Placement NarratorPlacement `yaml:"placement"`
 
-	// Badge generation fields (when badge + output are set, SVG is generated)
-	Output   string  `yaml:"output"`    // SVG generation output path
-	Value    string  `yaml:"value"`     // right side text (supports templates)
-	Color    string  `yaml:"color"`     // hex color or "auto"
-	Font     string  `yaml:"font"`      // per-item font override (built-in name)
-	FontSize float64 `yaml:"font_size"` // per-item font size override
-	FontFile string  `yaml:"font_file"` // per-item custom font file override
-}
+	// ── kind: badge ───────────────────────────────────────────────────────
 
-// IsBreak returns true if this item is a break module.
-func (n NarratorItem) IsBreak() bool {
-	return n.Break != nil && *n.Break
+	// Text is the badge label (left side text).
+	Text string `yaml:"text,omitempty"`
+
+	// Value is the badge value (right side text, supports templates).
+	Value string `yaml:"value,omitempty"`
+
+	// Color is the badge color (hex or "auto").
+	Color string `yaml:"color,omitempty"`
+
+	// Font is the badge font name override.
+	Font string `yaml:"font,omitempty"`
+
+	// FontSize is the badge font size override.
+	FontSize int `yaml:"font_size,omitempty"`
+
+	// Output is the SVG output path for badge generation.
+	Output string `yaml:"output,omitempty"`
+
+	// Link is the clickable URL (kind: badge, shield).
+	Link string `yaml:"link,omitempty"`
+
+	// ── kind: shield ──────────────────────────────────────────────────────
+
+	// Shield is the shields.io path (kind: shield).
+	Shield string `yaml:"shield,omitempty"`
+
+	// ── kind: text ────────────────────────────────────────────────────────
+
+	// Content is raw text/markdown content (kind: text).
+	Content string `yaml:"content,omitempty"`
+
+	// ── kind: component ───────────────────────────────────────────────────
+
+	// Spec is the component spec file path (kind: component).
+	Spec string `yaml:"spec,omitempty"`
 }
 
 // HasGeneration returns true if this badge item should trigger SVG generation.
-// Requires badge + output. Optional generation fields (value/color/font) have defaults.
+// Requires kind: badge + output set.
 func (n NarratorItem) HasGeneration() bool {
-	return n.Badge != "" && n.Output != ""
-}
-
-// DisplayFile returns the file reference for narrator display.
-// Falls back to Output if File is not explicitly set.
-func (n NarratorItem) DisplayFile() string {
-	if n.File != "" {
-		return n.File
-	}
-	return n.Output
+	return n.Kind == "badge" && n.Output != ""
 }
 
 // ToBadgeSpec extracts badge generation fields into a reusable BadgeSpec.
 func (n NarratorItem) ToBadgeSpec() BadgeSpec {
-	label := n.Label
-	if label == "" {
-		label = n.Badge
-	}
 	return BadgeSpec{
-		Label:    label,
+		Label:    n.Text,
 		Value:    n.Value,
 		Color:    n.Color,
 		Output:   n.Output,
 		Font:     n.Font,
-		FontSize: n.FontSize,
-		FontFile: n.FontFile,
+		FontSize: float64(n.FontSize),
 	}
 }
 
-// DefaultNarratorConfig returns an empty narrator config (disabled by default).
-func DefaultNarratorConfig() NarratorConfig {
-	return NarratorConfig{}
+// NarratorPlacement declares where an item goes in its target file.
+// Exactly one selector must be set (Between is the v2 primary selector).
+type NarratorPlacement struct {
+	// Between is a two-element array: [start_marker, end_marker].
+	// Content is placed relative to these markers.
+	Between [2]string `yaml:"between,omitempty"`
+
+	// After is a regex/literal line match (reserved for future use).
+	After string `yaml:"after,omitempty"`
+
+	// Before is a regex/literal line match (reserved for future use).
+	Before string `yaml:"before,omitempty"`
+
+	// Heading is a markdown heading match (reserved for future use).
+	Heading string `yaml:"heading,omitempty"`
+
+	// Mode controls how content is placed:
+	// replace (default), append, prepend, above, below.
+	Mode string `yaml:"mode,omitempty"`
+
+	// Inline renders items side-by-side when true (default: false).
+	Inline bool `yaml:"inline,omitempty"`
+}
+
+// validNarratorItemKinds enumerates all recognized narrator item kinds.
+var validNarratorItemKinds = map[string]bool{
+	"badge":     true,
+	"shield":    true,
+	"text":      true,
+	"component": true,
+	"break":     true,
+}
+
+// validPlacementModes enumerates all recognized placement modes.
+var validPlacementModes = map[string]bool{
+	"":        true, // default = replace
+	"replace": true,
+	"append":  true,
+	"prepend": true,
+	"above":   true,
+	"below":   true,
 }

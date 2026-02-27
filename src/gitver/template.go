@@ -83,6 +83,54 @@ import (
 //	"dev-{n:5}"
 //	"build-{randhex:8}"
 //	"nightly-{hex:4}"
+// ResolveVars expands {var:name} templates from the vars map.
+// Supports recursive resolution (a var value can reference other vars)
+// with cycle detection to prevent infinite loops.
+func ResolveVars(s string, vars map[string]string) string {
+	if len(vars) == 0 || !strings.Contains(s, "{var:") {
+		return s
+	}
+	return resolveVarsWithSeen(s, vars, nil)
+}
+
+func resolveVarsWithSeen(s string, vars map[string]string, seen map[string]bool) string {
+	for {
+		start := strings.Index(s, "{var:")
+		if start == -1 {
+			return s
+		}
+		end := strings.Index(s[start:], "}")
+		if end == -1 {
+			return s
+		}
+		end += start
+		name := s[start+5 : end]
+		val, ok := vars[name]
+		if !ok {
+			// Unknown var — leave placeholder intact, advance past it
+			// to avoid infinite loop
+			prefix := s[:end+1]
+			rest := resolveVarsWithSeen(s[end+1:], vars, seen)
+			return prefix + rest
+		}
+		// Cycle detection
+		if seen == nil {
+			seen = make(map[string]bool)
+		}
+		if seen[name] {
+			// Cycle — leave placeholder intact
+			prefix := s[:end+1]
+			rest := resolveVarsWithSeen(s[end+1:], vars, seen)
+			return prefix + rest
+		}
+		seen[name] = true
+		// Recursively resolve the var value itself
+		val = resolveVarsWithSeen(val, vars, seen)
+		delete(seen, name) // allow same var in different positions
+		s = s[:start] + val + s[end+1:]
+	}
+}
+
 func ResolveTemplate(tmpl string, v *VersionInfo) string {
 	return ResolveTemplateWithDir(tmpl, v, "")
 }
@@ -90,11 +138,20 @@ func ResolveTemplate(tmpl string, v *VersionInfo) string {
 // ResolveTemplateWithDir expands template variables with scoped version support.
 // rootDir is needed to resolve scoped versions via git; pass "" to skip scoped resolution.
 func ResolveTemplateWithDir(tmpl string, v *VersionInfo, rootDir string) string {
+	return ResolveTemplateWithDirAndVars(tmpl, v, rootDir, nil)
+}
+
+// ResolveTemplateWithDirAndVars expands template variables with scoped version
+// support and user-defined {var:name} variables from config.
+func ResolveTemplateWithDirAndVars(tmpl string, v *VersionInfo, rootDir string, vars map[string]string) string {
 	if v == nil {
 		return tmpl
 	}
 
 	s := tmpl
+
+	// Resolve {var:name} templates first — var values may contain other templates.
+	s = ResolveVars(s, vars)
 
 	// Resolve scoped version templates first: {version:SCOPE}, {base:SCOPE}, etc.
 	// These need git access so they require rootDir.

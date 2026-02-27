@@ -21,12 +21,15 @@ var (
 
 var narratorRunCmd = &cobra.Command{
 	Use:   "run",
-	Short: "Run narrator sections from config",
-	Long: `Execute all narrator sections defined in the narrator config.
+	Short: "Run narrator items from config",
+	Long: `Execute all narrator items defined in the narrator config.
 
-Each section is composed from its items and placed into the target file
-according to its placement rules. Existing managed sections are replaced
-idempotently; new sections are inserted at the specified position.`,
+Each item is composed from its kind and placed into the target file
+according to its placement markers. Existing managed content between
+markers is replaced idempotently.
+
+Items sharing the same placement markers are composed together:
+inline items are joined with spaces, block items with newlines.`,
 	RunE: runNarratorRun,
 }
 
@@ -37,9 +40,8 @@ func init() {
 }
 
 func runNarratorRun(cmd *cobra.Command, args []string) error {
-	ncfg := cfg.Git.Narrator
-	if len(ncfg.Files) == 0 {
-		return fmt.Errorf("no narrator files configured in narrator.files")
+	if len(cfg.Narrator) == 0 {
+		return fmt.Errorf("no narrator files configured")
 	}
 
 	rootDir, err := os.Getwd()
@@ -54,16 +56,8 @@ func runNarratorRun(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "  warning: version detection failed: %v\n", err)
 	}
 
-	// Resolve URL bases.
-	linkBase := strings.TrimRight(ncfg.LinkBase, "/")
-	rawBase := ncfg.RawBase
-	if rawBase == "" && linkBase != "" {
-		rawBase = registry.DeriveRawBase(linkBase)
-	}
-	rawBase = strings.TrimRight(rawBase, "/")
-
-	for _, fileCfg := range ncfg.Files {
-		if err := processNarratorFile(fileCfg, rootDir, linkBase, rawBase, versionInfo); err != nil {
+	for _, fileCfg := range cfg.Narrator {
+		if err := processNarratorFile(fileCfg, rootDir, versionInfo); err != nil {
 			return err
 		}
 	}
@@ -71,18 +65,41 @@ func runNarratorRun(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func processNarratorFile(fileCfg config.NarratorFileConfig, rootDir, linkBase, rawBase string, vi *gitver.VersionInfo) error {
-	path := fileCfg.Path
+// placementKey is the grouping key for items sharing the same placement.
+// Items with identical placement markers, mode, and inline flag are composed together.
+type placementKey struct {
+	StartMarker string
+	EndMarker   string
+	Mode        string
+	Inline      bool
+}
+
+// placementGroup holds items sharing the same placement.
+type placementGroup struct {
+	Key   placementKey
+	Items []config.NarratorItem
+}
+
+func processNarratorFile(fileCfg config.NarratorFile, rootDir string, vi *gitver.VersionInfo) error {
+	path := fileCfg.File
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(rootDir, path)
 	}
+
+	// Resolve URL bases from per-file config.
+	linkBase := strings.TrimRight(fileCfg.LinkBase, "/")
+	rawBase := ""
+	if linkBase != "" {
+		rawBase = registry.DeriveRawBase(linkBase)
+	}
+	rawBase = strings.TrimRight(rawBase, "/")
 
 	// Read existing file (or start empty).
 	content := ""
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			return fmt.Errorf("narrator: reading %s: %w", fileCfg.Path, err)
+			return fmt.Errorf("narrator: reading %s: %w", fileCfg.File, err)
 		}
 		// File doesn't exist yet — start fresh.
 	} else {
@@ -91,113 +108,115 @@ func processNarratorFile(fileCfg config.NarratorFileConfig, rootDir, linkBase, r
 
 	original := content
 
-	for _, section := range fileCfg.Sections {
-		content = applyNarratorSection(content, section, linkBase, rawBase, vi)
+	// Group items by placement (items sharing the same markers are composed together).
+	groups := groupItemsByPlacement(fileCfg.Items)
+
+	for _, group := range groups {
+		// Build modules from items in this group.
+		modules := buildModulesV2(group.Items, linkBase, rawBase, vi)
+		if len(modules) == 0 {
+			continue
+		}
+
+		// Compose modules: inline items joined with space, block items with newline.
+		var composed string
+		if group.Key.Inline {
+			composed = narrator.ComposeInline(modules)
+		} else {
+			composed = narrator.Compose(modules)
+		}
+		if composed == "" {
+			continue
+		}
+
+		// Replace content between the placement markers.
+		if group.Key.StartMarker != "" && group.Key.EndMarker != "" {
+			updated, found := registry.ReplaceBetween(content, group.Key.StartMarker, group.Key.EndMarker, composed)
+			if found {
+				content = updated
+			} else if verbose {
+				fmt.Fprintf(os.Stderr, "  warning: markers not found in %s: %s ... %s\n",
+					fileCfg.File, group.Key.StartMarker, group.Key.EndMarker)
+			}
+		}
 	}
 
 	if nrDryRun {
 		if content != original {
-			fmt.Printf("  narrator %s (changed)\n", fileCfg.Path)
+			fmt.Printf("  narrator %s (changed)\n", fileCfg.File)
 			fmt.Println(content)
 		} else {
-			fmt.Printf("  narrator %s (unchanged)\n", fileCfg.Path)
+			fmt.Printf("  narrator %s (unchanged)\n", fileCfg.File)
 		}
 		return nil
 	}
 
 	if content == original {
-		fmt.Printf("  narrator %s (unchanged)\n", fileCfg.Path)
+		fmt.Printf("  narrator %s (unchanged)\n", fileCfg.File)
 		return nil
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("narrator: creating directory for %s: %w", fileCfg.Path, err)
+		return fmt.Errorf("narrator: creating directory for %s: %w", fileCfg.File, err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return fmt.Errorf("narrator: writing %s: %w", fileCfg.Path, err)
+		return fmt.Errorf("narrator: writing %s: %w", fileCfg.File, err)
 	}
-	fmt.Printf("  narrator %s (updated)\n", fileCfg.Path)
+	fmt.Printf("  narrator %s (updated)\n", fileCfg.File)
 	return nil
 }
 
-func applyNarratorSection(content string, section config.NarratorSection, linkBase, rawBase string, vi *gitver.VersionInfo) string {
-	// Build modules from items.
-	modules := buildModules(section.Items, linkBase, rawBase, vi)
-	if len(modules) == 0 {
-		return content
-	}
+// groupItemsByPlacement groups items by their placement key, preserving declaration order.
+// Items with the same (between markers, mode, inline) are collected into one group.
+func groupItemsByPlacement(items []config.NarratorItem) []placementGroup {
+	var groups []placementGroup
+	keyIndex := make(map[placementKey]int)
 
-	// Compose modules into content.
-	composed := narrator.Compose(modules)
-	if composed == "" {
-		return content
-	}
+	for _, item := range items {
+		key := placementKey{
+			StartMarker: item.Placement.Between[0],
+			EndMarker:   item.Placement.Between[1],
+			Mode:        item.Placement.Mode,
+			Inline:      item.Placement.Inline,
+		}
 
-	// Resolve placement.
-	position := section.Placement.NormalizedPosition()
-
-	// If this is a named section (not plain), try to replace existing markers first.
-	if !section.Plain && section.Name != "" {
-		if updated, found := registry.ReplaceSection(content, section.Name, composed); found {
-			return updated
+		if idx, ok := keyIndex[key]; ok {
+			groups[idx].Items = append(groups[idx].Items, item)
+		} else {
+			keyIndex[key] = len(groups)
+			groups = append(groups, placementGroup{
+				Key:   key,
+				Items: []config.NarratorItem{item},
+			})
 		}
 	}
 
-	// Section doesn't exist yet (or plain mode) — use placement to insert.
-	if section.Plain {
-		return registry.PlaceContent(content, section.Placement.Section, position, section.Placement.Match, composed, section.Inline, true)
-	}
-
-	// Wrap in markers before placing.
-	var wrapped string
-	if section.Inline {
-		wrapped = registry.WrapSectionInline(section.Name, composed)
-	} else {
-		wrapped = registry.WrapSection(section.Name, composed)
-	}
-
-	// Place the wrapped section.
-	sectionAnchor := section.Placement.Section
-	matchPattern := section.Placement.Match
-
-	if sectionAnchor != "" || matchPattern != "" {
-		return registry.PlaceContent(content, sectionAnchor, position, matchPattern, wrapped, section.Inline, false)
-	}
-
-	// No anchor — use document-level position.
-	switch position {
-	case "top":
-		return wrapped + "\n" + content
-	case "bottom":
-		return content + "\n" + wrapped
-	default:
-		// Default: prepend to top.
-		return wrapped + "\n\n" + content
-	}
+	return groups
 }
 
-// buildModules converts NarratorItem config entries into narrator.Module instances.
-func buildModules(items []config.NarratorItem, linkBase, rawBase string, vi *gitver.VersionInfo) []narrator.Module {
+// buildModulesV2 converts v2 NarratorItem entries into narrator.Module instances.
+// Dispatches on item.Kind instead of checking which field is set.
+func buildModulesV2(items []config.NarratorItem, linkBase, rawBase string, vi *gitver.VersionInfo) []narrator.Module {
 	var modules []narrator.Module
 
 	for _, item := range items {
-		switch {
-		case item.IsBreak():
+		switch item.Kind {
+		case "break":
 			modules = append(modules, narrator.BreakModule{})
 
-		case item.Badge != "":
-			mod := resolveBadgeItem(item, linkBase, rawBase)
+		case "badge":
+			mod := resolveBadgeItemV2(item, linkBase, rawBase)
 			if mod != nil {
 				modules = append(modules, mod)
 			}
 
-		case item.Shield != "":
-			label := item.Label
+		case "shield":
+			label := item.Text
 			if label == "" {
 				label = item.Shield
 			}
 			if vi != nil {
-				label = gitver.ResolveTemplate(label, vi)
+				label = gitver.ResolveTemplateWithDirAndVars(label, vi, "", cfg.Vars)
 			}
 			modules = append(modules, narrator.ShieldModule{
 				Path:  item.Shield,
@@ -205,17 +224,17 @@ func buildModules(items []config.NarratorItem, linkBase, rawBase string, vi *git
 				Link:  resolveLink(item.Link, linkBase),
 			})
 
-		case item.Text != "":
-			text := item.Text
+		case "text":
+			text := item.Content
 			if vi != nil {
-				text = gitver.ResolveTemplate(text, vi)
+				text = gitver.ResolveTemplateWithDirAndVars(text, vi, "", cfg.Vars)
 			}
 			modules = append(modules, narrator.TextModule{Text: text})
 
-		case item.Component != "":
-			spec, err := component.ParseSpec(item.Component)
+		case "component":
+			spec, err := component.ParseSpec(item.Spec)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "narrator: component %s: %v\n", item.Component, err)
+				fmt.Fprintf(os.Stderr, "narrator: component %s: %v\n", item.Spec, err)
 				continue
 			}
 			docs := component.GenerateDocs([]*component.SpecFile{spec})
@@ -226,19 +245,20 @@ func buildModules(items []config.NarratorItem, linkBase, rawBase string, vi *git
 	return modules
 }
 
-// resolveBadgeItem resolves a badge NarratorItem to a BadgeModule.
-func resolveBadgeItem(item config.NarratorItem, linkBase, rawBase string) narrator.Module {
+// resolveBadgeItemV2 resolves a v2 badge NarratorItem to a BadgeModule for markdown composition.
+// Uses the badge's Output path (SVG file) with rawBase to construct the image URL.
+func resolveBadgeItemV2(item config.NarratorItem, linkBase, rawBase string) narrator.Module {
 	var imgURL string
-	if item.URL != "" {
-		imgURL = item.URL
-	} else if item.DisplayFile() != "" && rawBase != "" {
-		imgURL = rawBase + "/" + strings.TrimPrefix(item.DisplayFile(), "./")
-	} else {
+	if item.Output != "" && rawBase != "" {
+		imgURL = rawBase + "/" + strings.TrimPrefix(item.Output, "./")
+	}
+
+	if imgURL == "" {
 		return nil
 	}
 
 	return narrator.BadgeModule{
-		Alt:    item.Badge,
+		Alt:    item.Text,
 		ImgURL: imgURL,
 		Link:   resolveLink(item.Link, linkBase),
 	}

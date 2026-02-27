@@ -9,6 +9,7 @@ import (
 
 	"github.com/sofmeright/stagefreight/src/build"
 	"github.com/sofmeright/stagefreight/src/config"
+	"github.com/sofmeright/stagefreight/src/gitver"
 	"github.com/sofmeright/stagefreight/src/registry"
 )
 
@@ -18,8 +19,8 @@ func init() {
 
 // ImagePlanInput bundles the config needed for image build planning.
 type ImagePlanInput struct {
-	Docker *config.DockerConfig
-	Policy config.GitPolicyConfig
+	Cfg     *config.Config // full config
+	BuildID string         // optional: build specific entry by ID (empty = all)
 }
 
 // imageEngine builds container images and pushes to registries.
@@ -36,31 +37,9 @@ func (e *imageEngine) Plan(ctx context.Context, cfgRaw interface{}, det *build.D
 	if !ok {
 		return nil, fmt.Errorf("image engine: expected *ImagePlanInput, got %T", cfgRaw)
 	}
-	cfg := input.Docker
-	policy := input.Policy
+	cfg := input.Cfg
 
 	plan := &build.BuildPlan{}
-
-	// Resolve Dockerfile path
-	dockerfile := cfg.Dockerfile
-	if dockerfile == "" && len(det.Dockerfiles) > 0 {
-		dockerfile = det.Dockerfiles[0].Path
-	}
-	if dockerfile == "" {
-		return nil, fmt.Errorf("no Dockerfile found")
-	}
-
-	// Resolve context
-	buildContext := cfg.Context
-	if buildContext == "" {
-		buildContext = "."
-	}
-
-	// Resolve platforms
-	platforms := cfg.Platforms
-	if len(platforms) == 0 {
-		platforms = []string{fmt.Sprintf("linux/%s", runtime.GOARCH)}
-	}
 
 	// Resolve version for templates (tags, paths, URLs)
 	versionInfo, _ := build.DetectVersion(det.RootDir)
@@ -73,83 +52,149 @@ func (e *imageEngine) Plan(ctx context.Context, cfgRaw interface{}, det *build.D
 		}
 	}
 
-	// Resolve current branch and tag for registry filtering
+	// Resolve current branch and tag for target filtering
 	currentBranch := resolveBranch(det, versionInfo)
 	currentGitTag := os.Getenv("CI_COMMIT_TAG")
 
-	// Build tags from registry configs, filtering by branch and git tag
+	// Filter builds to kind: docker, optionally by --build ID
+	var dockerBuilds []config.BuildConfig
+	for _, b := range cfg.Builds {
+		if b.Kind != "docker" {
+			continue
+		}
+		if input.BuildID != "" && b.ID != input.BuildID {
+			continue
+		}
+		dockerBuilds = append(dockerBuilds, b)
+	}
+
+	if len(dockerBuilds) == 0 {
+		if input.BuildID != "" {
+			return nil, fmt.Errorf("no docker build found with id %q", input.BuildID)
+		}
+		return nil, fmt.Errorf("no docker builds defined")
+	}
+
+	// One BuildStep per docker build entry
+	for _, b := range dockerBuilds {
+		step, err := planDockerBuild(b, cfg, det, versionInfo, currentBranch, currentGitTag)
+		if err != nil {
+			return nil, fmt.Errorf("build %q: %w", b.ID, err)
+		}
+		plan.Steps = append(plan.Steps, *step)
+	}
+
+	return plan, nil
+}
+
+// planDockerBuild creates a BuildStep for a single docker build entry,
+// resolving its registry targets from cfg.Targets.
+func planDockerBuild(b config.BuildConfig, cfg *config.Config, det *build.Detection, versionInfo *gitver.VersionInfo, currentBranch, currentGitTag string) (*build.BuildStep, error) {
+	// Resolve Dockerfile path
+	dockerfile := b.Dockerfile
+	if dockerfile == "" && len(det.Dockerfiles) > 0 {
+		dockerfile = det.Dockerfiles[0].Path
+	}
+	if dockerfile == "" {
+		return nil, fmt.Errorf("no Dockerfile found")
+	}
+
+	// Resolve context
+	buildContext := b.Context
+	if buildContext == "" {
+		buildContext = "."
+	}
+
+	// Resolve platforms
+	platforms := b.Platforms
+	if len(platforms) == 0 {
+		platforms = []string{fmt.Sprintf("linux/%s", runtime.GOARCH)}
+	}
+
+	// Collect registry targets that reference this build
 	var tags []string
 	var registries []build.RegistryTarget
 
-	if len(cfg.Registries) > 0 {
-		for i, reg := range cfg.Registries {
-			// Validate registry config before resolving templates
-			if errs := registry.ValidateRegistryConfig(
-				reg.URL, reg.Path, reg.Tags, reg.Credentials, reg.Provider,
-				reg.Branches, reg.GitTags, reg.Retention,
-			); len(errs) > 0 {
-				return nil, fmt.Errorf("registry[%d] (%s/%s): %v", i, reg.URL, reg.Path, errs)
-			}
+	for i, t := range cfg.Targets {
+		if t.Kind != "registry" || t.Build != b.ID {
+			continue
+		}
 
-			if !registryAllowed(reg, currentBranch, currentGitTag, policy) {
-				continue
-			}
+		// Check when conditions
+		if !targetAllowed(t, currentBranch, currentGitTag, cfg.Policies) {
+			continue
+		}
 
-			// Resolve templates in URL, path, and tags
-			resolvedURL := build.ResolveTemplate(reg.URL, versionInfo)
-			resolvedPath := build.ResolveTemplate(reg.Path, versionInfo)
-			resolvedTags := build.ResolveTags(reg.Tags, versionInfo)
+		// Resolve templates using vars
+		resolvedURL := gitver.ResolveVars(t.URL, cfg.Vars)
+		resolvedURL = build.ResolveTemplate(resolvedURL, versionInfo)
 
-			// Resolve provider: explicit config, or auto-detect from URL
-			provider := reg.Provider
-			if provider == "" {
-				provider = build.DetectProvider(resolvedURL)
-			}
+		resolvedPath := gitver.ResolveVars(t.Path, cfg.Vars)
+		resolvedPath = build.ResolveTemplate(resolvedPath, versionInfo)
 
-			// Validate resolved tags conform to OCI spec
-			for _, t := range resolvedTags {
-				if err := registry.ValidateTag(t); err != nil {
-					return nil, fmt.Errorf("registry[%d] (%s/%s): resolved tag: %w", i, reg.URL, reg.Path, err)
-				}
-			}
+		tagTemplates := make([]string, len(t.Tags))
+		for j, tmpl := range t.Tags {
+			tagTemplates[j] = gitver.ResolveVars(tmpl, cfg.Vars)
+		}
+		resolvedTags := build.ResolveTags(tagTemplates, versionInfo)
 
-			target := build.RegistryTarget{
-				URL:         resolvedURL,
-				Path:        resolvedPath,
-				Tags:        resolvedTags,
-				Credentials: reg.Credentials,
-				Provider:    provider,
-				Retention:   reg.Retention,
-				TagPatterns: reg.Tags, // preserve unresolved templates for pattern matching
-			}
-			registries = append(registries, target)
+		// Resolve provider: explicit config, or auto-detect from URL
+		provider := t.Provider
+		if provider == "" {
+			provider = build.DetectProvider(resolvedURL)
+		}
 
-			for _, t := range resolvedTags {
-				var ref string
-				if provider == "local" {
-					// Local daemon: no registry URL prefix
-					ref = fmt.Sprintf("%s:%s", resolvedPath, t)
-				} else {
-					ref = fmt.Sprintf("%s/%s:%s", resolvedURL, resolvedPath, t)
-				}
-				tags = append(tags, ref)
+		// Validate resolved tags conform to OCI spec
+		for _, tag := range resolvedTags {
+			if err := registry.ValidateTag(tag); err != nil {
+				return nil, fmt.Errorf("target[%d] %q (%s/%s): resolved tag: %w", i, t.ID, t.URL, t.Path, err)
 			}
+		}
+
+		// Map retention (pointer to value)
+		var retention config.RetentionPolicy
+		if t.Retention != nil {
+			retention = *t.Retention
+		}
+
+		target := build.RegistryTarget{
+			URL:         resolvedURL,
+			Path:        resolvedPath,
+			Tags:        resolvedTags,
+			Credentials: t.Credentials,
+			Provider:    provider,
+			Retention:   retention,
+			TagPatterns: t.Tags,
+		}
+		registries = append(registries, target)
+
+		for _, tag := range resolvedTags {
+			var ref string
+			if provider == "local" {
+				ref = fmt.Sprintf("%s:%s", resolvedPath, tag)
+			} else {
+				ref = fmt.Sprintf("%s/%s:%s", resolvedURL, resolvedPath, tag)
+			}
+			tags = append(tags, ref)
 		}
 	}
 
-	// Auto-inject standard build args when the Dockerfile declares matching ARGs
-	// and no explicit override exists in the config.
-	buildArgs := cfg.BuildArgs
+	// Auto-inject standard build args
+	buildArgs := b.BuildArgs
 	if buildArgs == nil {
 		buildArgs = map[string]string{}
 	}
+	// Resolve vars in build args
+	for k, v := range buildArgs {
+		buildArgs[k] = gitver.ResolveVars(v, cfg.Vars)
+	}
 	buildArgs = autoInjectBuildArgs(buildArgs, det, versionInfo, dockerfile)
 
-	step := build.BuildStep{
-		Name:       "image",
+	step := &build.BuildStep{
+		Name:       b.ID,
 		Dockerfile: dockerfile,
 		Context:    buildContext,
-		Target:     cfg.Target,
+		Target:     b.Target,
 		Platforms:  platforms,
 		BuildArgs:  buildArgs,
 		Tags:       tags,
@@ -157,46 +202,74 @@ func (e *imageEngine) Plan(ctx context.Context, cfgRaw interface{}, det *build.D
 		Registries: registries,
 	}
 
-	plan.Steps = append(plan.Steps, step)
-	return plan, nil
+	return step, nil
+}
+
+// targetAllowed checks if the current branch and git tag permit executing a target.
+// Uses policy-aware pattern matching for when.branches and when.git_tags.
+func targetAllowed(t config.TargetConfig, branch, gitTag string, policies config.PoliciesConfig) bool {
+	// Resolve when.branches patterns against policies
+	if len(t.When.Branches) > 0 {
+		resolved := resolveWhenPatterns(t.When.Branches, policies.Branches)
+		if !config.MatchPatterns(resolved, branch) {
+			return false
+		}
+	}
+
+	// Resolve when.git_tags patterns against policies
+	if len(t.When.GitTags) > 0 {
+		resolved := resolveWhenPatterns(t.When.GitTags, policies.GitTags)
+		if gitTag == "" || !config.MatchPatterns(resolved, gitTag) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// resolveWhenPatterns resolves when condition entries to regex patterns.
+// Entries prefixed with "re:" are inline regex (strip prefix).
+// Other entries are looked up as policy names.
+func resolveWhenPatterns(entries []string, policyMap map[string]string) []string {
+	resolved := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if len(entry) > 3 && entry[:3] == "re:" {
+			// Inline regex
+			resolved = append(resolved, entry[3:])
+		} else if regex, ok := policyMap[entry]; ok {
+			// Policy name lookup
+			resolved = append(resolved, regex)
+		} else {
+			// Pass through as-is (may be treated as regex by MatchPatterns)
+			resolved = append(resolved, entry)
+		}
+	}
+	return resolved
 }
 
 // resolveBranch determines the current branch from detection, version info,
 // or CI environment variables (for detached HEAD in CI).
+// Priority cascade:
+//  1. Git detection (branch from local .git)
+//  2. Version info (uses git rev-parse which may work when detection doesn't)
+//  3. CI env vars (CI_COMMIT_BRANCH, GITHUB_REF_NAME — needed for detached HEAD in CI)
 func resolveBranch(det *build.Detection, v *build.VersionInfo) string {
-	// 1. Git detection
+	// 1. Git detection — most reliable when available
 	if det.GitInfo != nil && det.GitInfo.Branch != "" {
 		return det.GitInfo.Branch
 	}
-
-	// 2. Version info (uses git rev-parse which may work when detection doesn't)
+	// 2. Version info — uses git rev-parse which may work when detection doesn't
 	if v != nil && v.Branch != "" && v.Branch != "HEAD" {
 		return v.Branch
 	}
-
-	// 3. CI env vars (detached HEAD in CI)
+	// 3. CI env vars — needed for detached HEAD in CI pipelines
 	if b := os.Getenv("CI_COMMIT_BRANCH"); b != "" {
 		return b
 	}
 	if b := os.Getenv("GITHUB_REF_NAME"); b != "" {
 		return b
 	}
-
 	return ""
-}
-
-// registryAllowed checks if the current branch and git tag permit pushing to a registry.
-// Uses policy-aware pattern matching — supports regex, ! negation, and policy name resolution.
-// Empty patterns = no filter (always allowed).
-func registryAllowed(reg config.RegistryConfig, branch, gitTag string, policy config.GitPolicyConfig) bool {
-	if !config.MatchPatternsWithPolicy(reg.Branches, branch, policy.Branches) {
-		return false
-	}
-	// If registry specifies git_tags filters, require a matching git tag
-	if len(reg.GitTags) > 0 && (gitTag == "" || !config.MatchPatternsWithPolicy(reg.GitTags, gitTag, policy.Tags)) {
-		return false
-	}
-	return true
 }
 
 // autoInjectBuildArgs adds VERSION, COMMIT, and BUILD_DATE build args when the
@@ -250,7 +323,8 @@ func (e *imageEngine) Execute(ctx context.Context, plan *build.BuildPlan) (*buil
 
 	bx := build.NewBuildx(false)
 
-	// Authenticate to registries before building
+	// Authenticate to registries before building.
+	// All steps share the same daemon auth state, so one login pass is sufficient.
 	for _, step := range plan.Steps {
 		if step.Push && len(step.Registries) > 0 {
 			if err := bx.Login(ctx, step.Registries); err != nil {

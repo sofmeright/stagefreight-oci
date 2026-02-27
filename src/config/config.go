@@ -12,15 +12,40 @@ import (
 
 const defaultConfigFile = ".stagefreight.yml"
 
-// Config is the top-level StageFreight configuration.
+// Config is the top-level StageFreight v2 configuration.
 type Config struct {
-	Sources         SourcesConfig         `yaml:"sources"`
-	Git             GitConfig             `yaml:"git"`
-	Lint            LintConfig            `yaml:"lint"`
-	Docker          DockerConfig          `yaml:"docker"`
-	Security        SecurityConfig        `yaml:"security"`
-	Release         ReleaseConfig         `yaml:"release"`
-	GitlabComponent GitlabComponentConfig `yaml:"gitlab_component"`
+	// Version must be 1. The pre-version config was an unversioned alpha
+	// that never earned a schema number — this is the first stable schema.
+	Version int `yaml:"version"`
+
+	// Vars is a user-defined template variable dictionary.
+	// Referenced as {var:name} anywhere templates are resolved.
+	Vars map[string]string `yaml:"vars,omitempty"`
+
+	// Defaults is inert YAML anchor storage. StageFreight ignores this
+	// section entirely — it exists for users to define &anchors.
+	Defaults yaml.Node `yaml:"defaults,omitempty"`
+
+	// Sources defines build source configuration.
+	Sources SourcesConfig `yaml:"sources"`
+
+	// Policies defines named regex patterns for git tag and branch matching.
+	Policies PoliciesConfig `yaml:"policies"`
+
+	// Builds defines named build artifacts.
+	Builds []BuildConfig `yaml:"builds"`
+
+	// Targets defines distribution targets and side-effects.
+	Targets []TargetConfig `yaml:"targets"`
+
+	// Narrator defines content composition for file targets.
+	Narrator []NarratorFile `yaml:"narrator"`
+
+	// Lint holds lint-specific configuration (unchanged from v1).
+	Lint LintConfig `yaml:"lint"`
+
+	// Security holds security scanning configuration (unchanged from v1).
+	Security SecurityConfig `yaml:"security"`
 }
 
 // Load reads configuration from a YAML file.
@@ -33,8 +58,7 @@ func Load(path string) (*Config, error) {
 }
 
 // LoadWithWarnings reads configuration from a YAML file and returns
-// validation warnings alongside the config. Warnings include deprecation
-// notices (e.g., file→output alias) and typo detection.
+// validation warnings alongside the config.
 func LoadWithWarnings(path string) (*Config, []string, error) {
 	if path == "" {
 		path = defaultConfigFile
@@ -55,11 +79,7 @@ func LoadWithWarnings(path string) (*Config, []string, error) {
 		return nil, nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
 
-	// Apply deprecation aliases before validation (e.g., file→output for badges with gen fields)
-	aliasWarnings := applyDeprecationAliases(cfg)
-
 	warnings, verr := Validate(cfg)
-	warnings = append(aliasWarnings, warnings...)
 	if verr != nil {
 		return nil, warnings, fmt.Errorf("validating %s: %w", path, verr)
 	}
@@ -69,12 +89,11 @@ func LoadWithWarnings(path string) (*Config, []string, error) {
 
 func defaults() *Config {
 	return &Config{
-		Sources:         DefaultSourcesConfig(),
-		Git:             DefaultGitConfig(),
-		Lint:            DefaultLintConfig(),
-		Docker:          DefaultDockerConfig(),
-		Security:        DefaultSecurityConfig(),
-		Release:         DefaultReleaseConfig(),
-		GitlabComponent: DefaultGitlabComponentConfig(),
+		Version:  1,
+		Vars:     map[string]string{},
+		Sources:  DefaultSourcesConfig(),
+		Policies: DefaultPoliciesConfig(),
+		Lint:     DefaultLintConfig(),
+		Security: DefaultSecurityConfig(),
 	}
 }

@@ -45,8 +45,7 @@ func init() {
 }
 
 func runBadgeGenerate(cmd *cobra.Command, args []string) error {
-	defaults := cfg.Git.Narrator.Badges
-	eng, err := buildBadgeEngine(defaults)
+	eng, err := buildDefaultBadgeEngine()
 	if err != nil {
 		return err
 	}
@@ -57,31 +56,16 @@ func runBadgeGenerate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Config-driven mode
-	return generateConfigBadges(eng, defaults, args)
+	return generateConfigBadges(eng, args)
 }
 
-func buildBadgeEngine(defaults config.NarratorBadgeDefaults) (*badge.Engine, error) {
-	var metrics *badge.FontMetrics
-	var err error
-
-	size := defaults.FontSize
-	if size == 0 {
-		size = 11
-	}
-
-	if defaults.FontFile != "" {
-		metrics, err = badge.LoadFontFile(defaults.FontFile, size)
-	} else {
-		fontName := defaults.Font
-		if fontName == "" {
-			fontName = "dejavu-sans"
-		}
-		metrics, err = badge.LoadBuiltinFont(fontName, size)
-	}
+// buildDefaultBadgeEngine creates a badge engine with the default font (dejavu-sans 11pt).
+// Per-item font overrides are handled in buildItemEngine.
+func buildDefaultBadgeEngine() (*badge.Engine, error) {
+	metrics, err := badge.LoadBuiltinFont("dejavu-sans", 11)
 	if err != nil {
 		return nil, fmt.Errorf("loading badge font: %w", err)
 	}
-
 	return badge.New(metrics), nil
 }
 
@@ -118,42 +102,22 @@ func generateAdHocBadge(eng *badge.Engine) error {
 	useColor := output.UseColor()
 	w := os.Stdout
 
-	// Derive font name/size from defaults for display
-	defaults := cfg.Git.Narrator.Badges
-	fontName := defaults.Font
-	if fontName == "" {
-		fontName = "dejavu-sans"
-	}
-	size := defaults.FontSize
-	if size == 0 {
-		size = 11
-	}
-
 	sec := output.NewSection(w, "Badges", elapsed, useColor)
-	sec.Row("%-16s%-24s %-8s %.0fpt  %s", bgLabel, bgOutput, fontName, size, clr)
+	sec.Row("%-16s%-24s %-8s %dpt  %s", bgLabel, bgOutput, "dejavu-sans", 11, clr)
 	sec.Separator()
 	sec.Row("1 generated")
 	sec.Close()
 	return nil
 }
 
-func generateConfigBadges(eng *badge.Engine, defaults config.NarratorBadgeDefaults, names []string) error {
+func generateConfigBadges(eng *badge.Engine, names []string) error {
 	start := time.Now()
 
-	// Collect all narrator items that have generation capability
-	var items []config.NarratorItem
-	for _, f := range cfg.Git.Narrator.Files {
-		for _, s := range f.Sections {
-			for _, item := range s.Items {
-				if item.HasGeneration() {
-					items = append(items, item)
-				}
-			}
-		}
-	}
+	// Collect all narrator items that have badge generation capability (kind: badge + output set)
+	items := collectNarratorBadgeItems()
 
 	if len(items) == 0 {
-		return fmt.Errorf("no badge items with generation configured in git.narrator")
+		return fmt.Errorf("no badge items with generation configured in narrator")
 	}
 
 	// Filter to named items if specified
@@ -164,8 +128,8 @@ func generateConfigBadges(eng *badge.Engine, defaults config.NarratorBadgeDefaul
 		}
 		var filtered []config.NarratorItem
 		for _, item := range items {
-			// Match by badge name or ID
-			if nameSet[item.Badge] || (item.ID != "" && nameSet[item.ID]) {
+			// Match by badge text (label) or ID
+			if nameSet[item.Text] || (item.ID != "" && nameSet[item.ID]) {
 				filtered = append(filtered, item)
 			}
 		}
@@ -187,9 +151,9 @@ func generateConfigBadges(eng *badge.Engine, defaults config.NarratorBadgeDefaul
 		fmt.Fprintf(os.Stderr, "  warning: version detection failed: %v\n", err)
 	}
 
-	// Inject project description from config
-	if cfg.Docker.Readme.Description != "" {
-		gitver.SetProjectDescription(cfg.Docker.Readme.Description)
+	// Inject project description from docker-readme targets
+	if desc := firstDockerReadmeDescription(cfg); desc != "" {
+		gitver.SetProjectDescription(desc)
 	}
 
 	// Lazy Docker Hub info — only fetch if any badge value uses {docker.*}
@@ -213,17 +177,17 @@ func generateConfigBadges(eng *badge.Engine, defaults config.NarratorBadgeDefaul
 		// Resolve per-item engine if font is overridden.
 		itemEng := eng
 		if spec.Font != "" || spec.FontFile != "" || spec.FontSize != 0 {
-			override, err := buildItemEngine(spec, defaults)
+			override, err := buildItemEngine(spec)
 			if err != nil {
-				return fmt.Errorf("loading font for badge %s: %w", item.Badge, err)
+				return fmt.Errorf("loading font for badge %s: %w", item.Text, err)
 			}
 			itemEng = override
 		}
 
-		// Resolve value templates
+		// Resolve value templates (including {var:name} support)
 		value := spec.Value
 		if versionInfo != nil && value != "" {
-			value = gitver.ResolveTemplateWithDir(value, versionInfo, rootDir)
+			value = gitver.ResolveTemplateWithDirAndVars(value, versionInfo, rootDir, cfg.Vars)
 		}
 		value = gitver.ResolveDockerTemplates(value, dockerInfo)
 
@@ -240,30 +204,24 @@ func generateConfigBadges(eng *badge.Engine, defaults config.NarratorBadgeDefaul
 		})
 
 		if err := os.MkdirAll(filepath.Dir(spec.Output), 0o755); err != nil {
-			return fmt.Errorf("creating badge directory for %s: %w", item.Badge, err)
+			return fmt.Errorf("creating badge directory for %s: %w", item.Text, err)
 		}
 		if err := os.WriteFile(spec.Output, []byte(svg), 0o644); err != nil {
-			return fmt.Errorf("writing badge %s: %w", item.Badge, err)
+			return fmt.Errorf("writing badge %s: %w", item.Text, err)
 		}
 		generated++
 
 		// Collect row for section output
 		fontName := spec.Font
 		if fontName == "" {
-			fontName = defaults.Font
-		}
-		if fontName == "" {
 			fontName = "dejavu-sans"
 		}
 		size := spec.FontSize
 		if size == 0 {
-			size = defaults.FontSize
-		}
-		if size == 0 {
 			size = 11
 		}
 		rows = append(rows, badgeRow{
-			Name:  item.Badge,
+			Name:  item.Text,
 			Out:   spec.Output,
 			Font:  fontName,
 			Size:  size,
@@ -295,12 +253,9 @@ func generateConfigBadges(eng *badge.Engine, defaults config.NarratorBadgeDefaul
 }
 
 // buildItemEngine creates a badge engine for a BadgeSpec with font overrides.
-// Falls back to narrator badge defaults for any field not overridden.
-func buildItemEngine(spec config.BadgeSpec, defaults config.NarratorBadgeDefaults) (*badge.Engine, error) {
+// Falls back to defaults (dejavu-sans 11pt) for any field not set.
+func buildItemEngine(spec config.BadgeSpec) (*badge.Engine, error) {
 	size := spec.FontSize
-	if size == 0 {
-		size = defaults.FontSize
-	}
 	if size == 0 {
 		size = 11
 	}
@@ -313,14 +268,8 @@ func buildItemEngine(spec config.BadgeSpec, defaults config.NarratorBadgeDefault
 		metrics, err = badge.LoadFontFile(spec.FontFile, size)
 	case spec.Font != "":
 		metrics, err = badge.LoadBuiltinFont(spec.Font, size)
-	case defaults.FontFile != "":
-		metrics, err = badge.LoadFontFile(defaults.FontFile, size)
 	default:
-		fontName := defaults.Font
-		if fontName == "" {
-			fontName = "dejavu-sans"
-		}
-		metrics, err = badge.LoadBuiltinFont(fontName, size)
+		metrics, err = badge.LoadBuiltinFont("dejavu-sans", size)
 	}
 	if err != nil {
 		return nil, err

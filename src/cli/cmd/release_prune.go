@@ -19,9 +19,9 @@ var releasePruneCmd = &cobra.Command{
 	Use:   "prune",
 	Short: "Prune old releases using retention policy",
 	Long: `Delete old releases on the detected forge using the retention
-policy from .stagefreight.yml.
+policy from the primary release target in .stagefreight.yml.
 
-Tag templates from release.tags are converted to patterns so
+Alias templates from the release target are converted to patterns so
 only releases matching the configured tag scheme are candidates.
 
 Use --dry-run to preview what would be deleted without deleting.`,
@@ -35,8 +35,14 @@ func init() {
 }
 
 func runReleasePrune(cmd *cobra.Command, args []string) error {
-	if !cfg.Release.Retention.Active() {
-		return fmt.Errorf("no retention policy configured in release.retention")
+	// Find the primary release target (no remote forge fields).
+	primaryRelease := findPrimaryReleaseTarget(cfg)
+	if primaryRelease == nil {
+		return fmt.Errorf("no primary release target configured (targets[kind=release] without provider/url)")
+	}
+
+	if primaryRelease.Retention == nil || !primaryRelease.Retention.Active() {
+		return fmt.Errorf("no retention policy configured on primary release target %q", primaryRelease.ID)
 	}
 
 	rootDir, err := os.Getwd()
@@ -64,19 +70,19 @@ func runReleasePrune(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Resolve tag patterns from templates
+	// Resolve tag patterns from alias templates (rolling git tag aliases)
 	var patterns []string
-	if len(cfg.Release.Tags) > 0 {
-		patterns = retention.TemplatesToPatterns(cfg.Release.Tags)
+	if len(primaryRelease.Aliases) > 0 {
+		patterns = retention.TemplatesToPatterns(primaryRelease.Aliases)
 	}
 
 	if rpDryRun {
-		return runReleasePruneDryRun(ctx, w, color, forgeClient, patterns)
+		return runReleasePruneDryRun(ctx, w, color, forgeClient, patterns, *primaryRelease.Retention)
 	}
 
 	start := time.Now()
 	store := &forgeStore{forge: forgeClient}
-	result, err := retention.Apply(ctx, store, patterns, cfg.Release.Retention)
+	result, err := retention.Apply(ctx, store, patterns, *primaryRelease.Retention)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -104,7 +110,7 @@ func runReleasePrune(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runReleasePruneDryRun(ctx context.Context, w *os.File, color bool, f forge.Forge, patterns []string) error {
+func runReleasePruneDryRun(ctx context.Context, w *os.File, color bool, f forge.Forge, patterns []string, retentionPolicy config.RetentionPolicy) error {
 	store := &forgeStore{forge: f}
 	items, err := store.List(ctx)
 	if err != nil {
@@ -128,7 +134,7 @@ func runReleasePruneDryRun(ctx context.Context, w *os.File, color bool, f forge.
 	sortItems(candidates)
 
 	// Apply policies (dry run — just compute keep set)
-	keepSet := retention.ApplyPolicies(candidates, cfg.Release.Retention)
+	keepSet := retention.ApplyPolicies(candidates, retentionPolicy)
 
 	var keepCount, pruneCount int
 

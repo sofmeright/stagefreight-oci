@@ -43,7 +43,7 @@ Output modes:
 func init() {
 	componentDocsCmd.Flags().StringSliceVar(&cdSpecs, "spec", nil, "component spec file(s) to parse (repeatable)")
 	componentDocsCmd.Flags().StringVarP(&cdOutputFile, "output", "o", "", "write docs to file")
-	componentDocsCmd.Flags().StringVar(&cdReadme, "readme", "", "inject docs between <!-- sf:<name> --> markers in target file (section name from git.narrator config)")
+	componentDocsCmd.Flags().StringVar(&cdReadme, "readme", "", "inject docs between <!-- sf:<name> --> markers in target file (section name from narrator config)")
 	componentDocsCmd.Flags().BoolVar(&cdCommit, "commit", false, "commit updated target file via forge API")
 	componentDocsCmd.Flags().StringVar(&cdBranch, "branch", "", "branch to commit to")
 
@@ -51,13 +51,18 @@ func init() {
 }
 
 func runComponentDocs(cmd *cobra.Command, args []string) error {
-	// Resolve spec files: CLI flags → config → error.
+	// Resolve spec files: CLI flags → gitlab-component target → error.
 	specFiles := cdSpecs
 	if len(specFiles) == 0 {
-		specFiles = cfg.GitlabComponent.SpecFiles
+		for _, t := range cfg.Targets {
+			if t.Kind == "gitlab-component" && len(t.SpecFiles) > 0 {
+				specFiles = t.SpecFiles
+				break
+			}
+		}
 	}
 	if len(specFiles) == 0 {
-		return fmt.Errorf("no spec files specified; use --spec or configure gitlab_component.spec_files in .stagefreight.yml")
+		return fmt.Errorf("no spec files specified; use --spec or configure a gitlab-component target in .stagefreight.yml")
 	}
 
 	if cdOutputFile != "" && (cdReadme != "" || cdCommit) {
@@ -112,7 +117,7 @@ func runComponentDocs(cmd *cobra.Command, args []string) error {
 	if target != "" {
 		sectionName := cfgSection
 		if sectionName == "" {
-			return fmt.Errorf("cannot determine section name: no component item found in git.narrator config")
+			return fmt.Errorf("cannot determine section name: no component item found in narrator config")
 		}
 
 		existing, err := os.ReadFile(target)
@@ -174,18 +179,48 @@ func runComponentDocs(cmd *cobra.Command, args []string) error {
 }
 
 // resolveComponentTarget walks narrator config to find the file path and
-// section name for the first component item. Returns ("", "") if not found.
+// section name for the first component item.
+// In v2, the section name is derived from the placement between markers.
+// Returns ("", "") if not found.
 func resolveComponentTarget() (filePath, sectionName string) {
-	for _, f := range cfg.Git.Narrator.Files {
-		for _, s := range f.Sections {
-			for _, item := range s.Items {
-				if item.Component != "" {
-					return f.Path, s.Name
+	for _, f := range cfg.Narrator {
+		for _, item := range f.Items {
+			if item.Kind == "component" {
+				// Derive section name from between markers: ["<!-- sf:X:start -->", ...]
+				// Extract the section identifier from the start marker.
+				if item.Placement.Between != [2]string{} {
+					marker := item.Placement.Between[0]
+					// Parse "<!-- sf:NAME:start -->" to extract NAME
+					name := extractSectionName(marker)
+					if name != "" {
+						return f.File, name
+					}
 				}
+				return f.File, ""
 			}
 		}
 	}
 	return "", ""
+}
+
+// extractSectionName extracts the section name from a marker like "<!-- sf:NAME:start -->".
+func extractSectionName(marker string) string {
+	// Strip comment delimiters and whitespace
+	s := strings.TrimSpace(marker)
+	s = strings.TrimPrefix(s, "<!--")
+	s = strings.TrimSuffix(s, "-->")
+	s = strings.TrimSpace(s)
+
+	// Expect "sf:NAME:start" or "sf:NAME"
+	if !strings.HasPrefix(s, "sf:") {
+		return ""
+	}
+	s = s[3:] // strip "sf:"
+
+	// Strip ":start" suffix if present
+	s = strings.TrimSuffix(s, ":start")
+
+	return s
 }
 
 // commitReadme commits the updated README via the forge API.

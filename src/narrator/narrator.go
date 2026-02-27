@@ -48,6 +48,21 @@ func Compose(modules []Module) string {
 	return strings.Join(lines, "\n")
 }
 
+// ComposeInline renders all modules and joins them with spaces on a single line.
+// BreakModules are ignored. Use for inline badge rows.
+func ComposeInline(modules []Module) string {
+	var parts []string
+	for _, m := range modules {
+		if _, isBreak := m.(BreakModule); isBreak {
+			continue
+		}
+		if s := m.Render(); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 // ComposeRows takes rows of modules (pre-grouped). Items within a row are
 // space-joined. Rows are newline-joined. Kept for backward compatibility.
 func ComposeRows(rows [][]Module) string {
